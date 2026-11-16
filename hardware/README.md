@@ -6,6 +6,11 @@ from the back lid, and the USB-C power cable leaves through a slot in the bottom
 
 Outside size: Ø158 mm, 46 mm deep (57.6 mm including the Skådis hooks).
 
+| Front | Back |
+|---|---|
+| ![Front of the mount with the display](images/mount-front.png) | ![Back lid with Skådis hooks and fan vents](images/mount-back.png) |
+| Display flush in the front, vents in the top wall | Two Skådis hooks (top), two anti-tilt pegs (bottom), fan intake slots, lid screws |
+
 ## Files
 
 | File | What it is |
@@ -14,11 +19,12 @@ Outside size: Ø158 mm, 46 mm deep (57.6 mm including the Skådis hooks).
 | `sky-radar-mount-lid-skadis.stl` | Back lid with Skådis hooks, Pi mounting holes and fan vents |
 | `sky-radar-mount.f3d` | Fusion 360 file to edit the design |
 | `sky-radar-mount.step` | STEP for other CAD programs |
+| `images/` | The pictures used in this guide |
 
-The `.f3d` and `.step` also contain simple grey stand-ins named `REF …` (display, Pi 5, cooler)
+The `.f3d` and `.step` also contain simple stand-ins named `REF …` (display, Pi 5, cooler, standoffs)
 for checking the fit. They are not printed.
 
-## Printing (tested settings for a Bambu Lab printer)
+## Printing (settings for a Bambu Lab printer)
 
 - **Material:** PETG is recommended, since the Pi runs warm inside. PLA works if the room stays cool.
 - 0.2 mm layers, 4 walls, 15–20 % infill.
@@ -40,15 +46,49 @@ for checking the fit. They are not printed.
 
 ## Assembly
 
-1. Push the display into the front of the shell until it rests on the inner ledge. Screw it in from
-   behind with the 4 × M3 × 6 screws through the arms.
-2. Screw the four standoffs onto the lid (screws from the outside of the lid).
-3. Mount the Pi 5 **upside down** on the standoffs, with the cooler facing the lid. The fan then pulls
-   air in through the slots right above it.
-4. Connect HDMI and touch USB between the Pi and the display. Plug the USB-C power cable into the Pi
-   and lay the cable into the slot in the bottom of the shell.
-5. Close the lid with the 3 × M3 × 10 screws and hang it on the Skådis board: put the top hooks
-   through the slots, then let it drop down onto the bottom pegs.
+### Step 1: Fit the display into the shell
+
+![Display in the shell, seen from behind](images/step1-display-into-shell.png)
+
+1. Turn the display so its **connectors (HDMI, USB-C) point down**.
+2. Push it into the front of the shell until it rests on the inner ledge. The glass ends up flush with the front.
+3. From behind, screw it in with **4 × M3 × 6 mm** screws through the four arms into the display's threaded holes.
+   Tighten gently. The arms only need to hold, not clamp.
+
+You can also see the three lid screw posts on the inside wall, and the **USB-C cable slot** in the bottom edge.
+
+### Step 2: Mount the Pi 5 on the lid
+
+![Pi 5 with active cooler on standoffs under the lid](images/step2-pi-on-lid.png)
+
+1. Screw the **4 × M2.5 × 20 mm standoffs** (brass) to the lid, with the screws going in from the outside of the lid.
+2. Fit the active cooler to the Pi 5 if it isn't on already.
+3. Mount the Pi **upside down** on the standoffs, with the **cooler facing the lid** (silver block in the
+   picture). The fan sits right under the lower vent slots and pulls fresh air straight in.
+
+### Step 3: Connect the cables and close the lid
+
+![Lid with the Pi pulled away from the shell](images/step3-close-lid.png)
+
+1. Connect the **micro-HDMI → HDMI** cable from the Pi to the display, and the **USB-A → USB-C** touch cable.
+   Tuck the loops into the bottom of the shell.
+2. Plug the **USB-C power cable** into the Pi and lay the cable into the **slot in the bottom of the shell**.
+   The slot is open towards the back, so the plug doesn't need to fit through it.
+3. Put the lid on, hooks facing out, and fasten it with **3 × M3 × 10 mm** screws.
+
+### Step 4: Hang it on the Skådis board
+
+![The radar hanging on a Skådis pegboard](images/step4-hang-on-skadis.png)
+
+1. Hold the radar about 1 cm higher than where it should end up and push the **two top hooks** straight
+   into two slots in the same row, **80 mm apart** (one empty slot column between them).
+2. Let it drop down. The hooks catch behind the board, and the **two bottom pegs** slide into the slots
+   below so it can't tip or swing.
+
+![Seen from behind the board: hooks through the top slots, pegs in the bottom slots](images/step4-hook-detail.png)
+
+*Seen from behind the board: the two hooks come through their slots and hang down behind the board,
+and the pegs sit in the slots further down.*
 
 ## Screen orientation
 
@@ -68,6 +108,8 @@ The Waveshare display's picture is upright when its connectors point **up**, so 
   ```
 
 ## Before printing, check
+
 - The display's mounting bosses are assumed to be **M3**. Try an M3 screw in one before printing.
 
 Display dimensions are taken from Waveshare's official 3D model (5inch 1080x1080 LCD, SKU 24369).
+The pictures are rendered from the Fusion 360 model in this folder.
