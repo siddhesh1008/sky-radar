@@ -30,6 +30,8 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 
 ![Settings screens](docs/settings.png)
 
+Want to hang it on an IKEA Skådis pegboard? There's a 3D-printable enclosure for the display and the Pi 5 in [`hardware/`](hardware/README.md).
+
 ## Quick start (one file, any system)
 
 `run.py` detects the system and does everything: it creates a virtual environment (`.venv`),
