@@ -1,0 +1,23 @@
+{
+  "home_name": "Frankfurt (default)",
+  "lat": 50.110,
+  "lon": 8.682,
+
+  "source": "api",
+  "api_url": "https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}",
+  "local_url": "http://localhost/tar1090/data/aircraft.json",
+  "fetch_radius_nm": 100,
+  "poll_seconds": 5,
+
+  "ranges_km": [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100, 150],
+  "start_range_km": 50,
+  "overhead_alert_km": 3,
+
+
+  "map": true,
+  "map_brightness": 0.6,
+
+  "fullscreen": false,
+  "window_size": 800,
+  "fps": 30
+}
