@@ -13,6 +13,9 @@ It checks which system it is on and then:
   4. starts Sky Radar (fullscreen on a Raspberry Pi)
 
 Options:
+    --update                download the newest version from GitHub (git pull), set up anything new,
+                            and on a Pi restart the radar on its screen. From another computer:
+                              ssh sky-radar@sky-radar.local "python3 ~/sky-radar/run.py --update"
     --setup-only            set everything up, but don't start the app
     --windowed              start in a window, even on a Pi
     --no-autostart          don't add Sky Radar to the Pi's autostart
@@ -156,8 +159,40 @@ def ensure_pi_multitouch():
     subprocess.call(["pkill", "-HUP", "-x", "labwc"])   # make the desktop reload its settings now
 
 
+def update_from_github():
+    if not (shutil.which("git") and os.path.isdir(os.path.join(HERE, ".git"))):
+        fail("Can't update: this folder wasn't downloaded with git (git clone).")
+    say("Downloading the newest version from GitHub ...")
+    if subprocess.call(["git", "-C", HERE, "pull", "--ff-only"]) != 0:
+        fail("git pull failed (see above). Files changed by hand in this folder can block it.")
+
+
+def restart_on_screen():
+    """Stop the radar that is running and start the new version in the Pi's desktop session,
+    so an update works over SSH too."""
+    subprocess.call(["pkill", "-f", os.path.join(HERE, "sky_radar.py")])
+    env = os.environ.copy()
+    runtime = env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if "WAYLAND_DISPLAY" not in env:
+        sockets = sorted(f for f in os.listdir(runtime) if f.startswith("wayland-") and f[8:].isdigit()) \
+            if os.path.isdir(runtime) else []
+        if not sockets:
+            say("No desktop running right now; the new version starts at the next boot.")
+            return
+        env["WAYLAND_DISPLAY"] = sockets[0]
+    env.setdefault("DISPLAY", ":0")
+    subprocess.Popen([sys.executable, os.path.join(HERE, "run.py")], cwd=HERE, env=env,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    say("Restarted Sky Radar on the screen with the new version.")
+
+
 def main():
     args = sys.argv[1:]
+    update = "--update" in args
+    args = [a for a in args if a != "--update"]
+    if update:
+        update_from_github()
     setup_only = "--setup-only" in args
     windowed = "--windowed" in args
     autostart = "--no-autostart" not in args
@@ -177,6 +212,9 @@ def main():
         ensure_pi_multitouch()
     if setup_only:
         say("Setup complete.")
+        return
+    if update and IS_LINUX:
+        restart_on_screen()
         return
 
     if pi and not windowed and "--fullscreen" not in args:

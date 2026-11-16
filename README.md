@@ -48,7 +48,7 @@ default, which makes pinch-to-zoom impossible. A backup of the original setting 
 `~/.config/labwc/rc.xml.before-sky-radar`. You can switch this on and off any time with
 **Settings → Pinch to zoom**, and `run.py` keeps whatever you chose there.
 
-Options: `--setup-only` (set up without starting) · `--windowed` (no fullscreen on a Pi) · `--no-autostart` · `--keep-touch-emulation` (leave the Pi's touch settings alone; pinch won't work).
+Options: `--update` (download the newest version from GitHub and restart) · `--setup-only` (set up without starting) · `--windowed` (no fullscreen on a Pi) · `--no-autostart` · `--keep-touch-emulation` (leave the Pi's touch settings alone; pinch won't work).
 
 Controls: drag to move the map · pinch to zoom (touch screen) · crosshair button or `H` = back to your location · tap/click a plane for details · tap empty space to close · `+`/`-` buttons or mouse wheel to zoom ·
 `MAP` button or `M` to show/hide the map · gear button or `S` for settings · `F` fullscreen · `Esc`/`Q` quit.
@@ -67,6 +67,26 @@ To try the Wi-Fi screens on a PC, start with `SKY_RADAR_FAKE_WIFI=1`. That shows
    ```
    That sets everything up, starts the radar fullscreen, and makes it start automatically at every boot.
    To stop autostart, delete the Sky Radar line in `~/.config/labwc/autostart`.
+
+### Updating the Pi after you change the code
+
+1. On your PC, commit and push your changes to GitHub:
+   ```
+   git add .
+   git commit -m "Describe what you changed"
+   git push
+   ```
+2. Update the Pi from your PC. It downloads the new version, installs anything new and restarts
+   the radar on its screen, with no reboot needed:
+   ```
+   ssh sky-radar@sky-radar.local "python3 ~/sky-radar/run.py --update"
+   ```
+   Use your own username and hostname if you chose different ones in Raspberry Pi Imager.
+   On the Pi itself (keyboard or terminal) it's just `python3 ~/sky-radar/run.py --update`.
+
+If the update says `git pull failed`, a file in `~/sky-radar` on the Pi was edited by hand.
+Undo those edits with `cd ~/sky-radar && git checkout -- .` and run the update again.
+Your `location.json` and `prefs.json` are never touched by updates.
 
 ### Wi-Fi
 
