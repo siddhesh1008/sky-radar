@@ -10,7 +10,7 @@
   "poll_seconds": 5,
 
   "ranges_km": [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100, 150],
-  "start_range_km": 50,
+  "start_range_km": 5,
   "military_alert_km": 4,
   "civil_alert_km": 1.25,
 
