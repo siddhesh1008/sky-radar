@@ -5,3 +5,4 @@ map_tiles/
 __pycache__/
 *.pyc
 .venv/
+prefs.json

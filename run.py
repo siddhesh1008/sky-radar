@@ -8,15 +8,18 @@ It checks which system it is on and then:
   1. creates a private Python environment in .venv (first run only)
   2. installs the packages from requirements.txt (only when that file changed)
      - on a Pi / Debian it installs missing system packages with apt if needed
-  3. on a Raspberry Pi: adds Sky Radar to the desktop autostart, so it starts at boot
+  3. on a Raspberry Pi: adds Sky Radar to the desktop autostart, so it starts at boot,
+     and turns off touch "mouse emulation" so pinch-to-zoom works
   4. starts Sky Radar (fullscreen on a Raspberry Pi)
 
 Options:
-    --setup-only     set everything up, but don't start the app
-    --windowed       start in a window, even on a Pi
-    --no-autostart   don't add Sky Radar to the Pi's autostart
+    --setup-only            set everything up, but don't start the app
+    --windowed              start in a window, even on a Pi
+    --no-autostart          don't add Sky Radar to the Pi's autostart
+    --keep-touch-emulation  leave the Pi's touch settings as they are (pinch-to-zoom won't work)
 """
 import hashlib
+import json
 import os
 import platform
 import shutil
@@ -126,12 +129,40 @@ def ensure_pi_autostart():
     say(f"Added Sky Radar to {path}, so it starts at boot. Delete that line to stop it.")
 
 
+def ensure_pi_multitouch():
+    """Raspberry Pi OS sets touch screens to "mouse emulation", which turns every touch into one mouse
+    pointer, so a second finger never reaches the app and pinch-to-zoom can't work. Switch it off.
+    (Pi OS's autotouch tool won't switch it back: it only writes this setting when there is none yet.)"""
+    try:
+        with open(os.path.join(HERE, "prefs.json")) as f:
+            if json.load(f).get("multitouch") is False:
+                return    # you switched pinch-to-zoom off in Settings: keep it that way
+    except (OSError, ValueError):
+        pass
+    path = os.path.expanduser("~/.config/labwc/rc.xml")
+    try:
+        with open(path) as f:
+            xml = f.read()
+    except OSError:
+        return            # not created yet (autotouch writes it at the first desktop login); next start fixes it
+    if 'mouseEmulation="yes"' not in xml:
+        return
+    backup = path + ".before-sky-radar"
+    if not os.path.exists(backup):
+        shutil.copyfile(path, backup)
+    with open(path, "w") as f:
+        f.write(xml.replace('mouseEmulation="yes"', 'mouseEmulation="no"'))
+    say(f"Turned off touch mouse emulation in {path} so pinch-to-zoom works (backup: {backup}).")
+    subprocess.call(["pkill", "-HUP", "-x", "labwc"])   # make the desktop reload its settings now
+
+
 def main():
     args = sys.argv[1:]
     setup_only = "--setup-only" in args
     windowed = "--windowed" in args
     autostart = "--no-autostart" not in args
-    args = [a for a in args if a not in ("--setup-only", "--windowed", "--no-autostart")]
+    keep_touch = "--keep-touch-emulation" in args
+    args = [a for a in args if a not in ("--setup-only", "--windowed", "--no-autostart", "--keep-touch-emulation")]
     pi = is_raspberry_pi()
 
     say(f"System: {'Raspberry Pi' if pi else platform.system()}, Python {platform.python_version()}")
@@ -142,14 +173,20 @@ def main():
     ensure_packages()
     if pi and autostart:
         ensure_pi_autostart()
+    if pi and not keep_touch:
+        ensure_pi_multitouch()
     if setup_only:
         say("Setup complete.")
         return
 
     if pi and not windowed and "--fullscreen" not in args:
         args.append("--fullscreen")
+    env = os.environ.copy()
+    if IS_LINUX and env.get("WAYLAND_DISPLAY") and "SDL_VIDEODRIVER" not in env:
+        # Native Wayland (not the X11 layer): needed to receive real multi-finger touch for pinch-to-zoom
+        env["SDL_VIDEODRIVER"] = "wayland"
     say("Starting Sky Radar ...")
-    code = subprocess.call([venv_python(), os.path.join(HERE, "sky_radar.py")] + args)
+    code = subprocess.call([venv_python(), os.path.join(HERE, "sky_radar.py")] + args, env=env)
     if code != 0:
         fail(f"Sky Radar stopped with an error (code {code}).")
 

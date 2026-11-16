@@ -24,6 +24,7 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 - Settings on the screen itself (gear button):
   - **Location:** type an address and pick from suggestions as you type
   - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
+  - **Pinch to zoom:** on/off switch for real multi-touch on the Pi (off = touch works like a mouse)
 - First start: if there's no internet it opens Wi-Fi setup, then asks for your location
 
 ![Settings screens](docs/settings.png)
@@ -39,10 +40,14 @@ installs the packages, and starts Sky Radar. Later runs skip whatever is already
 | Raspberry Pi / Linux | `python3 run.py` |
 | macOS | `python3 run.py` |
 
-On a Raspberry Pi it also starts fullscreen, installs any missing system packages with apt, and
-adds itself to the desktop autostart so the radar comes up at every boot.
+On a Raspberry Pi it also starts fullscreen, installs any missing system packages with apt,
+adds itself to the desktop autostart so the radar comes up at every boot, and turns off the
+desktop's touch "mouse emulation". Raspberry Pi OS turns every touch into a single mouse pointer by
+default, which makes pinch-to-zoom impossible. A backup of the original setting is saved as
+`~/.config/labwc/rc.xml.before-sky-radar`. You can switch this on and off any time with
+**Settings → Pinch to zoom**, and `run.py` keeps whatever you chose there.
 
-Options: `--setup-only` (set up without starting) · `--windowed` (no fullscreen on a Pi) · `--no-autostart`.
+Options: `--setup-only` (set up without starting) · `--windowed` (no fullscreen on a Pi) · `--no-autostart` · `--keep-touch-emulation` (leave the Pi's touch settings alone; pinch won't work).
 
 Controls: drag to move the map · pinch to zoom (touch screen) · crosshair button or `H` = back to your location · tap/click a plane for details · tap empty space to close · `+`/`-` buttons or mouse wheel to zoom ·
 `MAP` button or `M` to show/hide the map · gear button or `S` for settings · `F` fullscreen · `Esc`/`Q` quit.

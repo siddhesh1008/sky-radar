@@ -34,6 +34,8 @@ R = 500                  # radius of the radar area in canvas pixels
 KM_PER_DEG = 111.32
 EARTH_RADIUS_KM = 6378.137
 SAVED_LOCATION = os.path.join(HERE, "location.json")
+PREFS_FILE = os.path.join(HERE, "prefs.json")          # small local choices, e.g. pinch-to-zoom on/off
+LABWC_RC = os.path.expanduser("~/.config/labwc/rc.xml")  # Raspberry Pi desktop settings (touch)
 SEARCH_URL = "https://photon.komoot.io/api/"
 
 # Colours
@@ -116,6 +118,58 @@ def describe_place(props):
     town = " ".join(x for x in (props.get("postcode"), props.get("city") or props.get("county")) if x)
     detail = detail_first + ", ".join(x for x in (town, props.get("country")) if x)
     return main, detail
+
+
+# --------------------------------------------------------------------------- multi-touch (Pi)
+def load_prefs():
+    try:
+        with open(PREFS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_prefs(**changes):
+    prefs = load_prefs()
+    prefs.update(changes)
+    try:
+        with open(PREFS_FILE, "w", encoding="utf-8") as f:
+            json.dump(prefs, f, indent=2)
+    except OSError:
+        pass
+
+
+def multitouch_state():
+    """True = real multi-touch (pinch works), False = touch acts as a mouse, None = not a Pi desktop."""
+    try:
+        with open(LABWC_RC, encoding="utf-8") as f:
+            xml = f.read()
+    except OSError:
+        return None
+    if 'mouseEmulation="yes"' in xml:
+        return False
+    if 'mouseEmulation="no"' in xml:
+        return True
+    return None
+
+
+def set_multitouch(on):
+    """Switch the Pi desktop's touch mode and remember the choice (run.py respects it)."""
+    try:
+        with open(LABWC_RC, encoding="utf-8") as f:
+            xml = f.read()
+        backup = LABWC_RC + ".before-sky-radar"
+        if not os.path.exists(backup):
+            with open(backup, "w", encoding="utf-8") as f:
+                f.write(xml)
+        old, new = ('"yes"', '"no"') if on else ('"no"', '"yes"')
+        with open(LABWC_RC, "w", encoding="utf-8") as f:
+            f.write(xml.replace("mouseEmulation=" + old, "mouseEmulation=" + new))
+    except OSError:
+        return False
+    save_prefs(multitouch=on)
+    subprocess.call(["pkill", "-HUP", "-x", "labwc"])     # desktop reloads its touch settings
+    return True
 
 
 # --------------------------------------------------------------------------- settings UI
@@ -713,6 +767,20 @@ class Settings:
                 self.wifi_name = None
         threading.Thread(target=work, daemon=True).start()
 
+    def _toggle_pinch(self):
+        state = multitouch_state()
+        if state is not None:
+            set_multitouch(not state)
+
+    @staticmethod
+    def _draw_switch(ui, cx, cy, on):
+        """Small on/off switch like on a phone."""
+        track = pygame.Rect(0, 0, 76, 40)
+        track.center = (cx, cy)
+        pygame.draw.rect(ui.canvas, SWEEP if on else GRID, track, border_radius=20)
+        knob_x = track.right - 20 if on else track.left + 20
+        pygame.draw.circle(ui.canvas, (240, 245, 245), (knob_x, cy), 15)
+
     def _first_run_check(self):
         """No internet at start (after giving the Pi time to join a saved network) -> Wi-Fi setup.
         No location chosen yet -> location search."""
@@ -774,9 +842,15 @@ class Settings:
             wifi_value = f"Connected to {self.wifi_name}" if self.wifi_name else "Not connected"
         else:
             wifi_value = "Managed by this computer"
+        touch = multitouch_state()
+        if touch is None:
+            touch_value = "Not needed on this computer"
+        else:
+            touch_value = "On" if touch else "Off - touch works like a mouse"
         rows = [("Location", self.location.name, lambda: self.show("location")),
-                ("Wi-Fi", wifi_value, lambda: self.show("wifi"))]
-        y = 280
+                ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
+                ("Pinch to zoom", touch_value, self._toggle_pinch)]
+        y = 230
         for title, value, action in rows:
             rect = pygame.Rect(0, 0, 700, 100)
             rect.midtop = (C, y)
@@ -784,11 +858,14 @@ class Settings:
             pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
             ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 22), "topleft")
             ui.blit_text(value[:44], 28, TEXT_DIM, (rect.x + 28, rect.y + 62), "topleft")
-            ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
+            if title == "Pinch to zoom" and touch is not None:
+                self._draw_switch(ui, rect.right - 70, rect.centery, touch)
+            elif title != "Pinch to zoom":
+                ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
             self.rects.append((rect, action))
             y += 120
         close = pygame.Rect(0, 0, 260, 70)
-        close.midtop = (C, 560)
+        close.midtop = (C, 610)
         draw_button(ui, close, "Close", primary=True)
         self.rects.append((close, self.close))
 
