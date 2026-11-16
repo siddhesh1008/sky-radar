@@ -146,6 +146,11 @@ Details are fetched only for the plane you tap, and are cached:
 Map data © OpenStreetMap contributors. Flight data from adsb.lol. Aircraft and route data from adsbdb.com. Flight tracks from the OpenSky Network.
 Address search by Photon (komoot).
 
+## Contributing
+
+Improvements are welcome! Please **fork** the repo and open a **pull request**. Every change is reviewed
+and approved by the maintainer before it's merged. See [CONTRIBUTING.md](CONTRIBUTING.md) for the steps.
+
 ## License
 
 MIT © 2026 siddhesh1008. See [LICENSE](LICENSE).
