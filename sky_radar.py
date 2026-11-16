@@ -55,6 +55,8 @@ WARN = (240, 149, 149)
 PATH_BLUE = (70, 150, 255)       # where the selected plane has been
 ROUTE_WHITE = (235, 240, 240)    # where it is going
 HOME_BLUE = (66, 133, 244)       # your location dot
+ALERT_RED = (235, 50, 50)        # military aircraft close to you
+ALERT_YELLOW = (250, 200, 60)    # any other aircraft very close to you
 
 PLANE_SHAPE = [(0, -14), (3, -5), (14, 2), (14, 5), (3, 2), (2, 10), (6, 14), (6, 16),
                (0, 14), (-6, 16), (-6, 14), (-2, 10), (-3, 2), (-14, 5), (-14, 2), (-3, -5)]
@@ -1329,6 +1331,13 @@ class Radar:
         pygame.draw.circle(self._outside, (255, 0, 255), (C, C), C)
         self._outside.set_colorkey((255, 0, 255))
         self._halo = pygame.Surface((64, 64), pygame.SRCALPHA)       # soft halo around the blue dot
+        self._alert_fill = {}
+        for name, col in (("red", ALERT_RED), ("yellow", ALERT_YELLOW)):
+            surf = pygame.Surface((CANVAS, CANVAS))
+            surf.fill(col)
+            self._alert_fill[name] = surf
+        self.alert_rect = None
+        self.alert_hex = None
         pygame.draw.circle(self._halo, (*HOME_BLUE, 60), (32, 32), 30)
 
     @property
@@ -1478,6 +1487,9 @@ class Radar:
         if self.map and math.hypot(x - self.btn_map[0], y - self.btn_map[1]) < 50:
             self.show_map = not self.show_map
             return
+        if self.alert_rect and self.alert_rect.collidepoint(x, y):
+            self.selected, self.card_collapsed = self.alert_hex, False   # tap the alert: show that plane
+            return
         if self.selected and self.card_rect and self.card_rect.collidepoint(x, y):
             self.card_collapsed = not self.card_collapsed   # tap the card: shrink it to see the path
             return
@@ -1515,12 +1527,10 @@ class Radar:
 
         # aircraft
         self.screen_pos = {}
-        in_range, mil_count, overhead = [], 0, None
+        in_range, mil_count = [], 0
         for hx, p in aircraft.items():
             hx_, hy_ = self.home_offset_km(p["lat"], p["lon"])
             p["_dist_km"] = math.hypot(hx_, hy_)            # distance from you (the blue dot)
-            if p["_dist_km"] <= self.cfg["overhead_alert_km"] and (overhead is None or p["_dist_km"] < overhead["_dist_km"]):
-                overhead = p
             dx, dy = self.offset_km(p["lat"], p["lon"])
             if math.hypot(dx, dy) > self.range_km:          # outside the circle on screen
                 continue
@@ -1548,8 +1558,10 @@ class Radar:
         self._draw_home()
         cv.blit(self._outside, (0, 0))    # trim map, paths and labels to the round screen
 
-        if overhead:
-            self._draw_overhead(overhead, now)
+        self.alert_rect, self.alert_hex = None, None
+        alert = self._find_alert(aircraft)
+        if alert:
+            self._draw_alert(*alert, now)
 
         # HUD
         hud_bg = (2, 20, 17)
@@ -1619,12 +1631,51 @@ class Radar:
             self.blit_text(callsign(p), 28, col, (x + 20, y - 18), "topleft")
             self.blit_text(fmt_alt(p), 24, col, (x + 20, y + 2), "topleft")
 
-    def _draw_overhead(self, p, now):
-        pulse = (now * 1.5) % 1.0
-        col = MIL if is_military(p) else SELECT
-        pygame.draw.circle(self.canvas, col, (C, C), int(20 + 60 * pulse), 3)
-        tag = "MILITARY OVERHEAD" if is_military(p) else "OVERHEAD"
-        self.blit_text(f"{tag}: {callsign(p)}  {fmt_alt(p)}", 44, col, (C, 160))
+    def _find_alert(self, aircraft):
+        """Most urgent nearby plane: (level, hex, plane). Level 2 = military within military_alert_km (red),
+        level 1 = any other aircraft within civil_alert_km (yellow). Planes on the ground never alert."""
+        mil_km = self.cfg.get("military_alert_km", 4)
+        civ_km = self.cfg.get("civil_alert_km", 1.25)
+        best = None
+        for hx, p in aircraft.items():
+            if p.get("alt_baro") == "ground":
+                continue
+            d = p["_dist_km"]
+            if is_military(p) and d <= mil_km:
+                level = 2
+            elif not is_military(p) and d <= civ_km:
+                level = 1
+            else:
+                continue
+            if best is None or (level, -d) > (best[0], -best[2]["_dist_km"]):
+                best = (level, hx, p)
+        return best
+
+    def _draw_alert(self, level, hx, p, now):
+        """Blinking red (military) or yellow (other aircraft) screen, edge ring and a banner."""
+        cv = self.canvas
+        red = level == 2
+        col = ALERT_RED if red else ALERT_YELLOW
+        pulse = 0.5 + 0.5 * math.sin(now * (7 if red else 5))
+        fill = self._alert_fill["red" if red else "yellow"]
+        fill.set_alpha(int((40 + 80 * pulse) if red else (25 + 55 * pulse)))   # red blinks stronger
+        cv.blit(fill, (0, 0))
+        pygame.draw.circle(cv, col, (C, C), C - 14, 12 + int(12 * pulse))
+        cv.blit(self._outside, (0, 0))
+
+        info = self.info.get(p)
+        d = p["_dist_km"]
+        title = "MILITARY ALERT" if red else "AIRCRAFT NEARBY"
+        parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
+        detail = "  |  ".join(x for x in parts if x)
+        w = max(self.fonts[44].size(title)[0], self.fonts[28].size(detail)[0]) + 48
+        rect = pygame.Rect(0, 0, w, 100)
+        rect.center = (C, 200)
+        pygame.draw.rect(cv, (12, 6, 6) if red else (14, 12, 4), rect, border_radius=16)
+        pygame.draw.rect(cv, col, rect, 4, border_radius=16)
+        self.blit_text(title, 44, col, (C, rect.y + 32))
+        self.blit_text(detail, 28, (240, 245, 245), (C, rect.y + 72))
+        self.alert_rect, self.alert_hex = rect, hx
 
     def _draw_buttons(self):
         for (bx, by), sign in ((self.btn_minus, "-"), (self.btn_plus, "+")):

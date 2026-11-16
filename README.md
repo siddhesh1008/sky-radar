@@ -20,7 +20,8 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 - Drag to move around the map and pinch to zoom, like Google Maps. Your location is a blue dot, and the crosshair button brings you back
 - 12 zoom steps from a 50 m radius to 150 km
 - Dark OpenStreetMap map underneath, cached for offline use
-- Pulsing alert when anything passes within 3 km
+- **Red screen alert** when a military aircraft is within 4 km of you, **yellow alert** when any other aircraft is within 1.25 km
+  (distances set in `config.json` as `military_alert_km` and `civil_alert_km`). Tap the alert banner to see that plane
 - Settings on the screen itself (gear button):
   - **Location:** type an address and pick from suggestions as you type
   - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
