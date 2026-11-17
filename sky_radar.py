@@ -15,6 +15,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -36,6 +37,7 @@ EARTH_RADIUS_KM = 6378.137
 SAVED_LOCATION = os.path.join(HERE, "location.json")
 PREFS_FILE = os.path.join(HERE, "prefs.json")          # small local choices, e.g. pinch-to-zoom on/off
 LABWC_RC = os.path.expanduser("~/.config/labwc/rc.xml")  # Raspberry Pi desktop settings (touch)
+KANSHI_CFG = os.path.expanduser("~/.config/kanshi/config")  # Raspberry Pi screen settings (rotation)
 SEARCH_URL = "https://photon.komoot.io/api/"
 
 # Colours
@@ -172,6 +174,66 @@ def set_multitouch(on):
     save_prefs(multitouch=on)
     subprocess.call(["pkill", "-HUP", "-x", "labwc"])     # desktop reloads its touch settings
     return True
+
+
+# --------------------------------------------------------------------------- screen rotation
+def system_rotation_available():
+    """True on a Wayland desktop (Raspberry Pi OS) where the real screen output can be rotated."""
+    return sys.platform.startswith("linux") and bool(os.environ.get("WAYLAND_DISPLAY")) and shutil.which("wlr-randr") is not None
+
+
+def _screen_output():
+    """(output name, rotation in degrees) of the first screen, from wlr-randr."""
+    out = subprocess.run(["wlr-randr"], capture_output=True, text=True, timeout=5).stdout
+    name, rot = None, 0
+    for line in out.splitlines():
+        if line and not line[0].isspace() and name is None:
+            name = line.split()[0]
+        m = re.match(r"\s*Transform:\s*(\S+)", line)
+        if m and name:
+            rot = int(m.group(1)) if m.group(1).isdigit() else 0
+            break
+    return name, rot
+
+
+def get_rotation():
+    if system_rotation_available():
+        try:
+            return _screen_output()[1]
+        except Exception:
+            return 0
+    return int(load_prefs().get("rotation", 0)) % 360
+
+
+def set_rotation(deg):
+    """Rotate the screen to 0/90/180/270 degrees clockwise. On the Pi this turns the real screen output
+    (touch follows) and saves it in kanshi's config so it survives reboots; elsewhere the app rotates itself."""
+    deg %= 360
+    if not system_rotation_available():
+        save_prefs(rotation=deg)
+        return
+    name, _ = _screen_output()
+    if not name:
+        return
+    value = "normal" if deg == 0 else str(deg)
+    subprocess.call(["wlr-randr", "--output", name, "--transform", value])
+    try:
+        with open(KANSHI_CFG, encoding="utf-8") as f:
+            cfg = f.read()
+    except OSError:
+        cfg = ""
+    pattern = re.compile(r"^(\s*output\s+" + re.escape(name) + r"\b.*)$", re.M)
+    line = pattern.search(cfg)
+    if line:
+        old = line.group(1)
+        new = re.sub(r"transform\s+\S+", "transform " + value, old) if "transform" in old else old + " transform " + value
+        cfg = cfg[:line.start(1)] + new + cfg[line.end(1):]
+    else:
+        cfg = cfg.rstrip() + ("\n" if cfg.strip() else "") + "profile {\n\toutput " + name + " enable transform " + value + "\n}\n"
+    os.makedirs(os.path.dirname(KANSHI_CFG), exist_ok=True)
+    with open(KANSHI_CFG, "w", encoding="utf-8") as f:
+        f.write(cfg)
+    subprocess.call(["pkill", "-HUP", "-x", "kanshi"])   # kanshi reloads and keeps the new rotation
 
 
 # --------------------------------------------------------------------------- settings UI
@@ -725,6 +787,9 @@ class Settings:
         self.rects = []
         self.wifi_name = None
         self._pending_flow = None
+        self.rotation = get_rotation()
+        # on a PC the app turns its own picture; on the Pi the system rotates the real screen
+        self.app_rotation = 0 if system_rotation_available() else self.rotation
         threading.Thread(target=self._first_run_check, daemon=True).start()
 
     @property
@@ -733,6 +798,7 @@ class Settings:
 
     # -- navigation ---------------------------------------------------------------
     def open_menu(self):
+        self.rotation = get_rotation()
         self.from_menu = True
         self.flow = []
         self.show("menu")
@@ -768,6 +834,36 @@ class Settings:
             except Exception:
                 self.wifi_name = None
         threading.Thread(target=work, daemon=True).start()
+
+    def _rotate(self, step):
+        self.rotation = (self.rotation + step) % 360
+        set_rotation(self.rotation)
+        if not system_rotation_available():
+            self.app_rotation = self.rotation
+
+    def _draw_rotate_button(self, ui, cx, cy, clockwise):
+        """Round button with a circular arrow (clockwise or anticlockwise)."""
+        rect = pygame.Rect(0, 0, 64, 64)
+        rect.center = (cx, cy)
+        pygame.draw.circle(ui.canvas, SCOPE_BG, (cx, cy), 32)
+        pygame.draw.circle(ui.canvas, RING, (cx, cy), 32, 2)
+        r = 15
+        arc = pygame.Rect(0, 0, 2 * r, 2 * r)
+        arc.center = (cx, cy)
+        if clockwise:      # gap on the right, arrow head at the top right pointing down
+            pygame.draw.arc(ui.canvas, SWEEP, arc, math.radians(40), math.radians(320), 4)
+            t = math.radians(40)
+            dx, dy = math.sin(t), math.cos(t)
+        else:              # mirror image: gap on the left, arrow head at the top left pointing down
+            pygame.draw.arc(ui.canvas, SWEEP, arc, math.radians(-140), math.radians(140), 4)
+            t = math.radians(140)
+            dx, dy = -math.sin(t), -math.cos(t)
+        px, py = cx + r * math.cos(t), cy - r * math.sin(t)
+        nx, ny = -dy, dx
+        tip = (px + dx * 7, py + dy * 7)
+        pygame.draw.polygon(ui.canvas, SWEEP, [tip, (px - dx * 3 + nx * 7, py - dy * 3 + ny * 7),
+                                               (px - dx * 3 - nx * 7, py - dy * 3 - ny * 7)])
+        return rect
 
     def _toggle_pinch(self):
         state = multitouch_state()
@@ -851,7 +947,8 @@ class Settings:
             touch_value = "On" if touch else "Off - touch works like a mouse"
         rows = [("Location", self.location.name, lambda: self.show("location")),
                 ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
-                ("Pinch to zoom", touch_value, self._toggle_pinch)]
+                ("Pinch to zoom", touch_value, self._toggle_pinch),
+                ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None)]
         y = 230
         for title, value, action in rows:
             rect = pygame.Rect(0, 0, 700, 100)
@@ -860,6 +957,13 @@ class Settings:
             pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
             ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 22), "topleft")
             ui.blit_text(value[:44], 28, TEXT_DIM, (rect.x + 28, rect.y + 62), "topleft")
+            if title == "Screen rotation":
+                ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
+                cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
+                self.rects.append((ccw, lambda: self._rotate(-90)))
+                self.rects.append((cw, lambda: self._rotate(90)))
+                y += 120
+                continue
             if title == "Pinch to zoom" and touch is not None:
                 self._draw_switch(ui, rect.right - 70, rect.centery, touch)
             elif title != "Pinch to zoom":
@@ -867,7 +971,7 @@ class Settings:
             self.rects.append((rect, action))
             y += 120
         close = pygame.Rect(0, 0, 260, 70)
-        close.midtop = (C, 610)
+        close.midtop = (C, 720)
         draw_button(ui, close, "Close", primary=True)
         self.rects.append((close, self.close))
 
@@ -1923,6 +2027,16 @@ def main():
         side = min(sw, sh)
         scale = side / CANVAS
         ox, oy = (sw - side) // 2, (sh - side) // 2
+        rot = radar.settings.app_rotation
+
+        def to_canvas(px, py):
+            """Window position -> canvas position, undoing the app's own rotation (PC only)."""
+            x, y = (px - ox) / scale, (py - oy) / scale
+            if rot:
+                a = math.radians(-rot)
+                dx, dy = x - C, y - C
+                x, y = C + dx * math.cos(a) - dy * math.sin(a), C + dx * math.sin(a) + dy * math.cos(a)
+            return x, y
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
@@ -1930,7 +2044,7 @@ def main():
             if ev.type == pygame.FINGERUP:            # always, so no finger is left "stuck down"
                 radar.finger_up(ev.finger_id)
             elif ev.type in (pygame.FINGERDOWN, pygame.FINGERMOTION) and not radar.settings.active:
-                fx, fy = (ev.x * sw - ox) / scale, (ev.y * sh - oy) / scale   # touch is 0..1 of the window
+                fx, fy = to_canvas(ev.x * sw, ev.y * sh)   # touch is 0..1 of the window
                 if ev.type == pygame.FINGERDOWN:
                     radar.finger_down(ev.finger_id, fx, fy)
                 else:
@@ -1941,7 +2055,7 @@ def main():
                 elif ev.type == pygame.KEYDOWN:
                     radar.settings.key(ev.key)
                 elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                    radar.tap((ev.pos[0] - ox) / scale, (ev.pos[1] - oy) / scale)
+                    radar.tap(*to_canvas(*ev.pos))
                 continue
             if ev.type == pygame.KEYDOWN:
                 if ev.key in (pygame.K_ESCAPE, pygame.K_q):
@@ -1960,15 +2074,17 @@ def main():
                     fullscreen = not fullscreen
                     screen = make_display(cfg, fullscreen)
             if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                radar.press((ev.pos[0] - ox) / scale, (ev.pos[1] - oy) / scale)
+                radar.press(*to_canvas(*ev.pos))
             if ev.type == pygame.MOUSEMOTION and ev.buttons[0]:
-                radar.drag((ev.pos[0] - ox) / scale, (ev.pos[1] - oy) / scale)
+                radar.drag(*to_canvas(*ev.pos))
             if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
-                radar.release((ev.pos[0] - ox) / scale, (ev.pos[1] - oy) / scale)
+                radar.release(*to_canvas(*ev.pos))
             if ev.type == pygame.MOUSEWHEEL:
                 radar.zoom(-1 if ev.y > 0 else 1)
 
         canvas = radar.draw(feed, time.time())
+        if rot:
+            canvas = pygame.transform.rotate(canvas, -rot)   # pygame turns anticlockwise, so negate
         screen.fill(BLACK)
         if side == CANVAS:
             screen.blit(canvas, (ox, oy))

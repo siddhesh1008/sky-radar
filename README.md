@@ -26,6 +26,8 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   - **Location:** type an address and pick from suggestions as you type
   - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
   - **Pinch to zoom:** on/off switch for real multi-touch on the Pi (off = touch works like a mouse)
+  - **Screen rotation:** ↺ / ↻ buttons turn the screen 90° at a time. On the Pi the whole screen and touch turn
+    and it's remembered after a reboot; on a PC the app turns its own window.
 - First start: if there's no internet it opens Wi-Fi setup, then asks for your location
 
 ![Settings screens](docs/settings.png)

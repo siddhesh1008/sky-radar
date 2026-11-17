@@ -98,6 +98,7 @@ the bottom where the power slot is. The display's screw pattern only fits this o
 The Waveshare display's picture is upright when its connectors point **up**, so the picture has to be
 **rotated 180°** on the Pi. Touch rotates along with it:
 
+- In Sky Radar: **Settings → Screen rotation**, tap ↻ twice (2 × 90° = 180°).
 - With the desktop: **Preferences → Screen Configuration**, right-click the screen →
   **Orientation → Inverted** → Apply.
 - Or put this in `~/.config/kanshi/config` and reboot:
