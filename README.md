@@ -9,7 +9,9 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 
 ## Features
 
-- Live aircraft from the free [adsb.lol](https://adsb.lol) API, or from your own RTL-SDR receiver
+- Live aircraft from the free [adsb.fi](https://adsb.fi) open data API, with [adsb.lol](https://adsb.lol) as an
+  automatic backup, or from your own RTL-SDR receiver. If one service is busy or rate-limited, Sky Radar
+  switches to the other by itself. The list is `api_urls` in `config.json`
 - Military aircraft in coral, civil aircraft in teal, with trails and heading
 - Tap a plane for a small details card. It appears on the half of the screen away from the plane, so the plane stays visible:
   - **Civil:** model (e.g. Airbus A320neo), airline, from → to, altitude, speed in knots, and arrival time at the destination
@@ -142,10 +144,10 @@ Details are fetched only for the plane you tap, and are cached:
 ## Notes
 
 - Not every military aircraft is visible. Many fighters switch ADS-B off or send no position.
-  The unfiltered adsb.lol feed and MLAT catch a good share of them.
+  The unfiltered adsb.fi / adsb.lol feeds and MLAT catch a good share of them.
 - Receiving ADS-B is legal in most countries. Be thoughtful about publishing live military movements.
 
-Map data © OpenStreetMap contributors. Flight data from adsb.lol. Aircraft and route data from adsbdb.com. Flight tracks from the OpenSky Network.
+Map data © OpenStreetMap contributors. Flight data from adsb.fi and adsb.lol. Aircraft and route data from adsbdb.com. Flight tracks from the OpenSky Network.
 Address search by Photon (komoot).
 
 ## Contributing

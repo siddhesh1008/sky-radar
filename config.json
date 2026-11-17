@@ -4,7 +4,10 @@
   "lon": 8.682,
 
   "source": "api",
-  "api_url": "https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}",
+  "api_urls": [
+    "https://opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{radius_nm}",
+    "https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}"
+  ],
   "local_url": "http://localhost/tar1090/data/aircraft.json",
   "fetch_radius_nm": 100,
   "poll_seconds": 5,

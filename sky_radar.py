@@ -991,25 +991,54 @@ class Feed:
         self.trails = {}          # hex -> [(lat, lon), ...]
         self.status = "Connecting..."
         self.last_ok = 0.0
+        self.resting = {}         # source name -> time until which it asked us to wait
         self.view = None          # set by the radar: () -> (lat, lon, radius_nm) of what is on screen
         threading.Thread(target=self._run, daemon=True).start()
 
-    def _url(self):
+    def _sources(self):
+        """[(name, url)] to try in order: your own receiver, or the free online services in config.json."""
         if self.cfg["source"] == "local":
-            return self.cfg["local_url"]
+            return [("own receiver", self.cfg["local_url"])]
         # Planes around the part of the map on screen. Only a rounded point (~10 km) is sent.
         if self.view:
             lat, lon, radius = self.view()
         else:
             (lat, lon), radius = self.location.current(), self.cfg["fetch_radius_nm"]
-        return self.cfg["api_url"].format(lat=round(lat, 1), lon=round(lon, 1), radius_nm=int(radius))
+        out = []
+        for template in self.cfg.get("api_urls") or [self.cfg["api_url"]]:
+            host = urllib.parse.urlparse(template).hostname or "online feed"
+            name = re.sub(r"^(api|opendata)\.", "", host)
+            out.append((name, template.format(lat=round(lat, 1), lon=round(lon, 1), radius_nm=min(250, int(radius)))))
+        return out
+
+    def _fetch(self):
+        """Try each source until one answers. A source that says "too many requests" (HTTP 429)
+        is rested for as long as it asks, and the next source is used meanwhile."""
+        problems, now = [], time.time()
+        for name, url in self._sources():
+            if self.resting.get(name, 0) > now:
+                problems.append(f"{name} rate-limited")
+                continue
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "sky-radar/0.1"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return name, json.load(resp)
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    wait = e.headers.get("Retry-After") or e.headers.get("x-ratelimit-reset") or "600"
+                    wait = int(wait) if str(wait).isdigit() else 600
+                    self.resting[name] = now + min(max(wait, 60), 6 * 3600)
+                    problems.append(f"{name} rate-limited")
+                else:
+                    problems.append(f"{name} HTTP {e.code}")
+            except Exception as e:
+                problems.append(f"{name} {type(e).__name__}")
+        raise RuntimeError(", ".join(problems))
 
     def _run(self):
         while True:
             try:
-                req = urllib.request.Request(self._url(), headers={"User-Agent": "sky-radar/0.1"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.load(resp)
+                source, data = self._fetch()
                 planes = data.get("ac") or data.get("aircraft") or []
                 positioned, mil_no_pos = {}, []
                 for p in planes:
@@ -1031,11 +1060,11 @@ class Feed:
                         del self.trails[hx]
                     self.aircraft = positioned
                     self.mil_no_pos = mil_no_pos
-                    self.status = "Live: " + ("own receiver" if self.cfg["source"] == "local" else "adsb.lol")
+                    self.status = "Live: " + source
                     self.last_ok = time.time()
             except Exception as e:  # network hiccups should never kill the display
                 with self.lock:
-                    self.status = f"Feed error: {type(e).__name__}"
+                    self.status = f"No flight data ({str(e)[:60]}), retrying"
             self.wake.wait(self.cfg["poll_seconds"])   # wakes early when the location changes
             self.wake.clear()
 
