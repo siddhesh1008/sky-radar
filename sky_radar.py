@@ -1767,8 +1767,8 @@ class Radar:
     def _find_alert(self, aircraft):
         """Most urgent nearby plane: (level, hex, plane). Level 2 = military within military_alert_km (red),
         level 1 = any other aircraft within civil_alert_km (yellow). Planes on the ground never alert."""
-        mil_km = self.cfg.get("military_alert_km", 4)
-        civ_km = self.cfg.get("civil_alert_km", 1.25)
+        mil_km = self.cfg.get("military_alert_km", 5)
+        civ_km = self.cfg.get("civil_alert_km", 5)
         best = None
         for hx, p in aircraft.items():
             if p.get("alt_baro") == "ground":
