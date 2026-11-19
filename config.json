@@ -18,6 +18,9 @@
   "civil_alert_km": 5,
   "warning_lead_seconds": 180,
   "home_elevation_m": null,
+  "sightings_km": 10,
+  "night_start": "22:00",
+  "night_end": "07:00",
 
 
   "map": true,

@@ -31,19 +31,34 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
     (`warning_lead_seconds` in `config.json`, 0 turns it off)
   - **Settings → Alert directions:** tap the compass directions you can actually see from (for example only W for a
     west-facing balcony). Planes in the other directions don't trigger alerts. **All** = alerts from every direction
+  - **Weather check:** cloud cover from Open-Meteo is shown at the top ("clouds 85%"), and alerts add
+    "Cloudy - it may be hidden" when the sky is overcast or visibility is poor
+- **Emergency alerts:** any plane squawking **7700** (general emergency), **7600** (radio failure) or **7500** (hijack)
+  gets a banner and a ring on the map, at any distance. Military jets in your alert zone still come first
+- **Sightings log:** every military aircraft that comes within 10 km is logged (time, callsign, model, closest
+  distance and direction). See it under **Settings → Sightings**: today, this week and the last 90 days.
+  Stored only on the device in `sightings.json` (`sightings_km` in `config.json`)
+- **Night mode:** dims the screen or switches it off at night (22:00–07:00 by default, `night_start` / `night_end`).
+  A touch wakes it for a minute, and **military alerts always wake it**
 - Settings on the screen itself (gear button):
   - **Location:** type an address and pick from suggestions as you type
   - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
   - **Alert directions:** compass to choose which sides (N, NE, E … NW) can trigger alerts
+  - **Sightings:** the list of military aircraft seen near you
+  - **Night mode:** tap to switch between Off, Dim at night and Screen off at night
   - **Pinch to zoom:** on/off switch for real multi-touch on the Pi (off = touch works like a mouse)
   - **Screen rotation:** ↺ / ↻ buttons turn the screen 90° at a time. On the Pi the whole screen and touch turn
     and it's remembered after a reboot; on a PC the app turns its own window.
 - First start: if there's no internet it opens Wi-Fi setup, then asks for your location
 
-| Alert | Settings |
-|---|---|
-| ![Red military alert telling you to look west](docs/alert.png) | ![Settings, alert directions, location search and Wi-Fi](docs/settings.png) |
-| Red alert for a military jet 3 km away, with the direction to look (example plane) | Settings menu, alert directions (west side selected), location search, Wi-Fi |
+![Alerts: incoming military jet, military jet in your zone, emergency squawk](docs/alerts.png)
+
+*Alerts (example planes): a military jet on its way ("WEST IN 1:10"), the same jet in your zone ("LOOK WEST, 23° UP"),
+and an airliner squawking 7700. The cloud hint appears because it was overcast.*
+
+![Settings, alert directions, sightings, location search and Wi-Fi](docs/settings.png)
+
+*Settings menu, alert directions (west side selected), sightings log (example entries), location search, Wi-Fi.*
 
 Want to hang it on an IKEA Skådis pegboard? There's a 3D-printable enclosure for the display and the Pi 5 in [`hardware/`](hardware/README.md).
 
@@ -125,6 +140,8 @@ Only a rounded position (about 1 km) is sent to the flight API.
 For the "how high to look" angle, your home's ground height is looked up once from
 [Open-Meteo](https://open-meteo.com) using a position rounded to about 100 m, then cached in `prefs.json`.
 To skip that, set `home_elevation_m` in `config.json` (metres above sea level).
+Cloud cover comes from Open-Meteo too, using a position rounded to about 1 km.
+Your sightings log (`sightings.json`) and settings (`prefs.json`) stay on the device and are git-ignored.
 
 ## Map
 
@@ -162,7 +179,7 @@ Details are fetched only for the plane you tap, and are cached:
 - Receiving ADS-B is legal in most countries. Be thoughtful about publishing live military movements.
 
 Map data © OpenStreetMap contributors. Flight data from adsb.fi and adsb.lol. Aircraft and route data from adsbdb.com. Flight tracks from the OpenSky Network.
-Address search by Photon (komoot). Ground height from Open-Meteo.
+Address search by Photon (komoot). Ground height and weather from Open-Meteo.
 
 ## Contributing
 

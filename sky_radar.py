@@ -40,6 +40,9 @@ LABWC_RC = os.path.expanduser("~/.config/labwc/rc.xml")  # Raspberry Pi desktop 
 KANSHI_CFG = os.path.expanduser("~/.config/kanshi/config")  # Raspberry Pi screen settings (rotation)
 SEARCH_URL = "https://photon.komoot.io/api/"
 ELEVATION_URL = "https://api.open-meteo.com/v1/elevation"   # ground height of your home (free, no key)
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"       # cloud cover (free, no key)
+SIGHTINGS_FILE = os.path.join(HERE, "sightings.json")         # your military sightings (stays on this device)
+EMERGENCY_SQUAWKS = {"7700": "GENERAL EMERGENCY", "7600": "RADIO FAILURE", "7500": "HIJACK"}
 
 # Colours
 BLACK = (0, 0, 0)
@@ -852,6 +855,68 @@ class DirectionsScreen:
             self.rects.append((rect, action))
 
 
+class SightingsScreen:
+    """List of military aircraft seen near home: today, this week and the last 90 days."""
+    PAGE = 6
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+        self.page = 0
+
+    def reset(self):
+        self.page = 0
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+
+    def _more(self, total):
+        pages = max(1, (total + self.PAGE - 1) // self.PAGE)
+        self.page = (self.page + 1) % pages
+
+    def draw(self, ui, now):
+        self.rects = []
+        log = ui.sightings
+        entries = sorted(log.entries, key=lambda e: e.get("last", 0), reverse=True)
+        draw_screen_bg(ui, "Military sightings",
+                       f"Today {log.today()}  |  This week {log.count_since(7 * 86400)}  |  90 days {len(entries)}")
+        if not entries:
+            ui.blit_text(f"No military aircraft within {fmt_dist(log.radius)} yet.", 28, TEXT_DIM, (C, 430))
+            ui.blit_text("They are logged here automatically.", 28, TEXT_DIM, (C, 470))
+        y = 235
+        for e in entries[self.page * self.PAGE:(self.page + 1) * self.PAGE]:
+            rect = pygame.Rect(0, 0, 760, 74)
+            rect.midtop = (C, y)
+            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
+            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=12)
+            when = time.strftime("%a %d %b  %H:%M", time.localtime(e.get("first", 0)))
+            ui.blit_text(f"{e.get('callsign', '?')}  -  {e.get('model', '?')}"[:40], 28, MIL, (rect.x + 20, rect.y + 10), "topleft")
+            ui.blit_text(f"{when}   closest {fmt_dist(e.get('closest_km', 0))} {e.get('dir', '')}   {e.get('alt', '')}"[:62],
+                         24, TEXT_DIM, (rect.x + 20, rect.y + 44), "topleft")
+            y += 82
+        buttons = [("Back", self.settings.done)]
+        if len(entries) > self.PAGE:
+            buttons.append(("More", lambda: self._more(len(entries))))
+        x = C - (len(buttons) * 200 + (len(buttons) - 1) * 12) // 2
+        for label, action in buttons:
+            rect = pygame.Rect(x, 745, 200, 66)
+            draw_button(ui, rect, label, primary=(label == "Back"))
+            self.rects.append((rect, action))
+            x += 212
+
+
 # --------------------------------------------------------------------------- settings menu
 class Settings:
     """Settings menu (gear button) and the first-run setup: Wi-Fi, then location."""
@@ -861,7 +926,9 @@ class Settings:
         self.location = location
         self.cfg = cfg
         self.wifi = FakeWifi() if os.environ.get("SKY_RADAR_FAKE_WIFI") else NmcliWifi()
-        self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self)}
+        self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self),
+                        "sightings": SightingsScreen(self)}
+        self.night_mode = load_prefs().get("night_mode", "off")      # "off", "dim" or "blank"
         saved = load_prefs().get("alert_directions", DIRECTIONS)
         self.alert_dirs = {d for d in saved if d in DIRECTIONS} if isinstance(saved, list) else set(DIRECTIONS)
         self.screen = None            # None = radar, "menu", "location" or "wifi"
@@ -947,6 +1014,15 @@ class Settings:
         pygame.draw.polygon(ui.canvas, SWEEP, [tip, (px - dx * 3 + nx * 7, py - dy * 3 + ny * 7),
                                                (px - dx * 3 - nx * 7, py - dy * 3 - ny * 7)])
         return rect
+
+    def _cycle_night(self):
+        order = ["off", "dim", "blank"]
+        self.night_mode = order[(order.index(self.night_mode) + 1) % 3] if self.night_mode in order else "dim"
+        save_prefs(night_mode=self.night_mode)
+
+    def night_label(self):
+        hours = f"{self.cfg.get('night_start', '22:00')}-{self.cfg.get('night_end', '07:00')}"
+        return {"off": "Off", "dim": f"Dim at night ({hours})", "blank": f"Screen off at night ({hours})"}.get(self.night_mode, "Off")
 
     def set_alert_dirs(self, dirs):
         self.alert_dirs = set(dirs)
@@ -1035,31 +1111,34 @@ class Settings:
         rows = [("Location", self.location.name, lambda: self.show("location")),
                 ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
                 ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
+                ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
+                 lambda: self.show("sightings")),
+                ("Night mode", self.night_label(), self._cycle_night),
                 ("Pinch to zoom", touch_value, self._toggle_pinch),
                 ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None)]
-        y = 200
+        y = 178
         for title, value, action in rows:
-            rect = pygame.Rect(0, 0, 700, 92)
+            rect = pygame.Rect(0, 0, 700, 74)
             rect.midtop = (C, y)
-            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=14)
-            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
-            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 18), "topleft")
-            ui.blit_text(value[:44], 28, TEXT_DIM, (rect.x + 28, rect.y + 56), "topleft")
+            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
+            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=12)
+            ui.blit_text(title, 28, TEXT, (rect.x + 26, rect.y + 10), "topleft")
+            ui.blit_text(value[:48], 24, TEXT_DIM, (rect.x + 26, rect.y + 44), "topleft")
             if title == "Screen rotation":
                 ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
                 cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
                 self.rects.append((ccw, lambda: self._rotate(-90)))
                 self.rects.append((cw, lambda: self._rotate(90)))
-                y += 104
+                y += 82
                 continue
             if title == "Pinch to zoom" and touch is not None:
                 self._draw_switch(ui, rect.right - 70, rect.centery, touch)
             elif title != "Pinch to zoom":
                 ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
             self.rects.append((rect, action))
-            y += 104
-        close = pygame.Rect(0, 0, 260, 70)
-        close.midtop = (C, 735)
+            y += 82
+        close = pygame.Rect(0, 0, 260, 64)
+        close.midtop = (C, 765)
         draw_button(ui, close, "Close", primary=True)
         self.rects.append((close, self.close))
 
@@ -1510,6 +1589,96 @@ class AircraftInfo:
                     self.cache[(hx, cs)].update(out, state=state, time=time.time())
 
 
+# --------------------------------------------------------------------------- weather
+class Weather:
+    """Cloud cover at home from Open-Meteo, refreshed every 15 minutes (position rounded to ~1 km)."""
+
+    def __init__(self, location):
+        self.location = location
+        self.cloud = None          # percent
+        self.visibility_km = None
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            lat, lon = self.location.current()
+            try:
+                url = f"{WEATHER_URL}?latitude={lat:.2f}&longitude={lon:.2f}&current=cloud_cover,visibility"
+                req = urllib.request.Request(url, headers={"User-Agent": "sky-radar/0.1"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    cur = json.load(resp).get("current", {})
+                self.cloud = cur.get("cloud_cover")
+                vis = cur.get("visibility")
+                self.visibility_km = vis / 1000 if isinstance(vis, (int, float)) else None
+            except Exception:
+                pass                       # keep the last value; try again later
+            time.sleep(15 * 60)
+
+    def label(self):
+        return f"clouds {round(self.cloud)}%" if isinstance(self.cloud, (int, float)) else ""
+
+    def spotting_hint(self):
+        """Short warning for the alert banner when the sky is unlikely to cooperate."""
+        if isinstance(self.cloud, (int, float)) and self.cloud >= 80:
+            return f"Cloudy ({round(self.cloud)}%) - it may be hidden"
+        if isinstance(self.visibility_km, (int, float)) and self.visibility_km < 3:
+            return f"Poor visibility ({self.visibility_km:.1f} km)"
+        return ""
+
+
+# --------------------------------------------------------------------------- sightings log
+class Sightings:
+    """Every military aircraft that came within sightings_km of home, one entry per aircraft per day.
+    Kept for 90 days in sightings.json on this device (git-ignored, never uploaded)."""
+
+    def __init__(self, cfg):
+        self.radius = cfg.get("sightings_km", 10)
+        self.dirty, self.saved_at = False, 0.0
+        try:
+            with open(SIGHTINGS_FILE, encoding="utf-8") as f:
+                self.entries = json.load(f)
+        except (OSError, ValueError):
+            self.entries = []
+        cutoff = time.time() - 90 * 86400
+        self.entries = [e for e in self.entries if e.get("last", 0) >= cutoff]
+
+    def record(self, p, model, direction, now):
+        if p.get("_dist_km", 99) > self.radius or p.get("alt_baro") == "ground":
+            return
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        for e in reversed(self.entries):
+            if e["hex"] == p.get("hex") and e["day"] == day:
+                break
+        else:
+            e = {"hex": p.get("hex"), "day": day, "first": now, "closest_km": 99}
+            self.entries.append(e)
+        e["last"] = now
+        e["callsign"] = callsign(p)
+        e["model"] = model or e.get("model") or p.get("t") or "Unknown type"
+        if p["_dist_km"] < e["closest_km"]:
+            e["closest_km"] = round(p["_dist_km"], 2)
+            e["dir"] = direction
+            e["alt"] = fmt_alt(p)
+        self.dirty = True
+
+    def maybe_save(self, now):
+        if self.dirty and now - self.saved_at > 30:
+            try:
+                with open(SIGHTINGS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.entries, f, indent=1)
+                self.dirty, self.saved_at = False, now
+            except OSError:
+                pass
+
+    def count_since(self, seconds):
+        cutoff = time.time() - seconds
+        return sum(1 for e in self.entries if e.get("last", 0) >= cutoff)
+
+    def today(self):
+        day = time.strftime("%Y-%m-%d")
+        return sum(1 for e in self.entries if e["day"] == day)
+
+
 # --------------------------------------------------------------------------- radar view
 class Radar:
     def __init__(self, cfg, location):
@@ -1545,8 +1714,15 @@ class Radar:
         self.map = MapLayer(cfg, location) if cfg.get("map", True) else None
         self.show_map = self.map is not None
         self.sweep_surf = pygame.Surface((CANVAS, CANVAS), pygame.SRCALPHA)
+        self.sightings = Sightings(cfg)
         self.settings = Settings(self, location, cfg)
         self.info = AircraftInfo()
+        self.weather = Weather(location)
+        self.wake_until = 0.0                 # night mode: a touch wakes the screen for a minute
+        self._swallow = False
+        self._mil_alert = False
+        self._night_fill = pygame.Surface((CANVAS, CANVAS))
+        self._night_fill.fill(BLACK)
         self.card_rect = None
         self.card_collapsed = False
         self._outside = pygame.Surface((CANVAS, CANVAS))   # black everywhere except the round screen
@@ -1607,7 +1783,31 @@ class Radar:
         self.view_lat = max(-80.0, min(80.0, math.degrees(math.atan(math.sinh(merc)))))
         self._update_view()
 
+    def night_active(self, now):
+        mode = self.settings.night_mode
+        if mode not in ("dim", "blank"):
+            return False
+        def mins(hhmm):
+            h, m = (int(v) for v in str(hhmm).split(":"))
+            return h * 60 + m
+        try:
+            start, end = mins(self.cfg.get("night_start", "22:00")), mins(self.cfg.get("night_end", "07:00"))
+        except ValueError:
+            return False
+        lt = time.localtime(now)
+        cur = lt.tm_hour * 60 + lt.tm_min
+        return (start <= cur < end) if start < end else (cur >= start or cur < end)
+
+    def asleep(self, now):
+        """Night mode is hiding the radar right now (no recent touch, no military alert)."""
+        return self.night_active(now) and now > self.wake_until and not self._mil_alert
+
     def press(self, x, y):
+        now = time.time()
+        if self.asleep(now):
+            self.wake_until = now + 60        # first touch only wakes the screen
+            self._swallow, self._press = True, None
+            return
         self._press = self._last_drag = (x, y)
         self.dragging = False
 
@@ -1670,6 +1870,9 @@ class Radar:
             self._place(geo, mid)
 
     def release(self, x, y):
+        if self._swallow:
+            self._swallow = False
+            return
         if self._press is not None and not self.dragging:
             self.tap(x, y)
         self._press = None
@@ -1754,6 +1957,8 @@ class Radar:
         for hx, p in aircraft.items():
             hx_, hy_ = self.home_offset_km(p["lat"], p["lon"])
             p["_dist_km"] = math.hypot(hx_, hy_)            # distance from you (the blue dot)
+            if is_military(p) and p["_dist_km"] <= self.sightings.radius:
+                self.sightings.record(p, self.info.get(p)["model"], compass_direction(hx_, hy_), now)
             dx, dy = self.offset_km(p["lat"], p["lon"])
             if math.hypot(dx, dy) > self.range_km:          # outside the circle on screen
                 continue
@@ -1781,15 +1986,18 @@ class Radar:
         self._draw_home()
         cv.blit(self._outside, (0, 0))    # trim map, paths and labels to the round screen
 
+        self.sightings.maybe_save(now)
         self.alert_rect, self.alert_hex = None, None
         alert = self._find_alert(aircraft)
+        self._mil_alert = bool(alert and alert[0] == 2)
         if alert:
             self._draw_alert(*alert, now)
 
         # HUD
         hud_bg = (2, 20, 17)
         place = self.location.name
-        self.blit_text(f"{place}  {time.strftime('%H:%M')}", 34, TEXT, (C, 100), bg=hud_bg)
+        clouds = self.weather.label()
+        self.blit_text(f"{place}  {time.strftime('%H:%M')}" + (f"  |  {clouds}" if clouds else ""), 34, TEXT, (C, 100), bg=hud_bg)
         summary = f"{len(in_range)} aircraft  |  {mil_count} military  |  {fmt_dist(self.range_km)}"
         self.blit_text(summary, 34, TEXT, (C, 930), bg=hud_bg)
         if mil_no_pos:
@@ -1805,6 +2013,14 @@ class Radar:
         self.card_rect = None
         if self.selected:
             self._draw_info(aircraft[self.selected], now)
+
+        if self.asleep(now):                  # night mode
+            if self.settings.night_mode == "dim":
+                self._night_fill.set_alpha(175)
+                cv.blit(self._night_fill, (0, 0))
+            else:
+                cv.fill(BLACK)
+                self.blit_text(time.strftime("%H:%M"), 34, (20, 60, 50), (C, C))
         return cv
 
     def _draw_sweep(self, now):
@@ -1875,6 +2091,15 @@ class Radar:
             d = math.hypot(e, n)
             p["_dir"] = compass_direction(e, n)
             alert = None
+            squawk = str(p.get("squawk") or "")
+            if squawk in EMERGENCY_SQUAWKS:
+                # emergencies show at any distance and in any direction, ranked below military jets in your zone
+                alert = {"kind": "emergency", "dir": p["_dir"], "eta": 0, "dist": d, "squawk": squawk}
+                rank = (2, True, 0, -d)
+                if best_rank is None or rank > best_rank:
+                    p["_alert"] = alert
+                    best, best_rank = (3, hx, p), rank
+                continue
             if d <= radius and p["_dir"] in dirs:
                 alert = {"kind": "now", "dir": p["_dir"], "eta": 0, "dist": d}
             else:
@@ -1892,7 +2117,7 @@ class Radar:
                                 break
             if alert is None:
                 continue
-            rank = (mil, alert["kind"] == "now", -alert["eta"], -d)
+            rank = (3 if mil else 1, alert["kind"] == "now", -alert["eta"], -d)
             if best_rank is None or rank > best_rank:
                 p["_alert"] = alert
                 best, best_rank = (2 if mil else 1, hx, p), rank
@@ -1937,7 +2162,8 @@ class Radar:
     def _draw_alert(self, level, hx, p, now):
         """Blinking red (military) or yellow (other aircraft) screen, edge ring and a banner."""
         cv = self.canvas
-        red = level == 2
+        emergency = level == 3
+        red = level >= 2
         col = ALERT_RED if red else ALERT_YELLOW
         alert = p.get("_alert") or {"kind": "now", "dir": p.get("_dir"), "eta": 0, "dist": p["_dist_km"]}
         soon = alert["kind"] == "soon"
@@ -1953,7 +2179,14 @@ class Radar:
         d = p["_dist_km"]
         where = DIRECTION_NAMES.get(alert["dir"], "")
         up = self._look_up(p, alert["dist"])
-        if soon:
+        if emergency:
+            title = f"EMERGENCY {alert['squawk']}: {EMERGENCY_SQUAWKS[alert['squawk']]}"
+            parts = [callsign(p), info["model"] or p.get("t") or "",
+                     f"{fmt_dist(round(d, 1 if d >= 1 else 2))} {alert['dir']}", fmt_alt(p)]
+            px, py = self.to_canvas(p["lat"], p["lon"])
+            if math.hypot(px - C, py - C) < R:
+                pygame.draw.circle(cv, ALERT_RED, (px, py), int(26 + 14 * pulse), 4)   # ring around the plane
+        elif soon:
             eta = int(alert["eta"])
             title = f"{'MILITARY' if red else 'AIRCRAFT'} INCOMING - {where} IN {eta // 60}:{eta % 60:02d}"
             parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away",
@@ -1962,14 +2195,17 @@ class Radar:
             title = f"{'MILITARY ALERT' if red else 'AIRCRAFT NEARBY'} - LOOK {where}" + (f", {up}" if up else "")
             parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
         detail = "  |  ".join(x for x in parts if x)
+        hint = "" if emergency else self.weather.spotting_hint()
         tsize = 44 if self.fonts[44].size(title)[0] <= 780 else 34
-        w = max(self.fonts[tsize].size(title)[0], self.fonts[28].size(detail)[0]) + 48
-        rect = pygame.Rect(0, 0, w, 100)
-        rect.center = (C, 200)
+        w = max(self.fonts[tsize].size(title)[0], self.fonts[28].size(detail)[0], self.fonts[24].size(hint)[0]) + 48
+        rect = pygame.Rect(0, 0, w, 128 if hint else 100)
+        rect.midtop = (C, 150)
         pygame.draw.rect(cv, (12, 6, 6) if red else (14, 12, 4), rect, border_radius=16)
         pygame.draw.rect(cv, col, rect, 4 if not soon else 2, border_radius=16)
         self.blit_text(title, tsize, col, (C, rect.y + 32))
         self.blit_text(detail, 28, (240, 245, 245), (C, rect.y + 72))
+        if hint:
+            self.blit_text(hint, 24, ALERT_YELLOW, (C, rect.y + 104))
         self.alert_rect, self.alert_hex = rect, hx
 
     def _draw_buttons(self):
@@ -2111,7 +2347,8 @@ class Radar:
         if t_cpa <= 0:
             return ("Closest to you", "passed", "moving away")
         miss = math.hypot(dx + vx * t_cpa, dy + vy * t_cpa)
-        return ("Closest to you", "in " + fmt_duration(t_cpa), f"{fmt_dist(round(miss, 1 if miss >= 1 else 2))} away")
+        when = fmt_duration(t_cpa)
+        return ("Closest to you", when if when == "now" else "in " + when, f"{fmt_dist(round(miss, 1 if miss >= 1 else 2))} away")
 
     def _draw_info(self, p, now):
         """Compact details card. It sits on the half of the screen away from the plane, so the plane stays visible."""
@@ -2128,7 +2365,8 @@ class Radar:
         if self.card_collapsed:
             parts = [callsign(p), info["model"] or "", alt, speed]
             label = "  |  ".join(x for x in parts if x)
-            rect = self.text(label, 24, col).get_rect(center=(C, 160 if at_top else 845)).inflate(28, 18)
+            top_y = self.alert_rect.bottom + 30 if self.alert_rect else 160      # stay clear of an alert banner
+            rect = self.text(label, 24, col).get_rect(center=(C, top_y if at_top else 845)).inflate(28, 18)
             self.card_rect = rect
             pygame.draw.rect(cv, (2, 20, 17), rect, border_radius=12)
             pygame.draw.rect(cv, col, rect, 2, border_radius=12)
@@ -2138,7 +2376,7 @@ class Radar:
         loading = info["state"] == "loading"
         rect = pygame.Rect(0, 0, 480, 140 if mil else 196)
         if at_top:
-            rect.midtop = (C, 135)
+            rect.midtop = (C, self.alert_rect.bottom + 12 if self.alert_rect else 135)   # below an alert banner
         else:
             rect.midbottom = (C, 878)
         self.card_rect = rect
