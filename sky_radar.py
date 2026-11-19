@@ -39,6 +39,7 @@ PREFS_FILE = os.path.join(HERE, "prefs.json")          # small local choices, e.
 LABWC_RC = os.path.expanduser("~/.config/labwc/rc.xml")  # Raspberry Pi desktop settings (touch)
 KANSHI_CFG = os.path.expanduser("~/.config/kanshi/config")  # Raspberry Pi screen settings (rotation)
 SEARCH_URL = "https://photon.komoot.io/api/"
+ELEVATION_URL = "https://api.open-meteo.com/v1/elevation"   # ground height of your home (free, no key)
 
 # Colours
 BLACK = (0, 0, 0)
@@ -1518,6 +1519,8 @@ class Radar:
         self.view_lat, self.view_lon = self.home_lat, self.home_lon   # centre of the screen
         self._update_view()
         location.listeners.append(self.recenter)                       # new location chosen: jump there
+        location.listeners.append(self._start_elevation_lookup)        # ...and look up its ground height
+        self._start_elevation_lookup()
         self._press = None
         self._last_drag = None
         self.dragging = False
@@ -1852,54 +1855,120 @@ class Radar:
             self.blit_text(fmt_alt(p), 24, col, (x + 20, y + 2), "topleft")
 
     def _find_alert(self, aircraft):
-        """Most urgent nearby plane: (level, hex, plane). Level 2 = military within military_alert_km (red),
-        level 1 = any other aircraft within civil_alert_km (yellow). Planes on the ground never alert,
-        and only planes in the directions chosen in Settings -> Alert directions count."""
+        """Most urgent plane for the alert banner, or None. Returns (level, hex, plane) with plane["_alert"] set.
+
+        A plane counts when it is inside your alert zone (within military_alert_km / civil_alert_km and in a
+        direction chosen in Settings -> Alert directions), or when its current speed and heading will bring it
+        into the zone within warning_lead_seconds ("incoming"). Military beats everything else, then planes
+        already in the zone, then whichever arrives first. Planes on the ground never alert."""
         mil_km = self.cfg.get("military_alert_km", 5)
         civ_km = self.cfg.get("civil_alert_km", 5)
+        lead = self.cfg.get("warning_lead_seconds", 180)
         dirs = self.settings.alert_dirs
-        best = None
+        best, best_rank = None, None
         for hx, p in aircraft.items():
             if p.get("alt_baro") == "ground":
                 continue
-            p["_dir"] = compass_direction(*self.home_offset_km(p["lat"], p["lon"]))
-            if p["_dir"] not in dirs:
-                continue
-            d = p["_dist_km"]
-            if is_military(p) and d <= mil_km:
-                level = 2
-            elif not is_military(p) and d <= civ_km:
-                level = 1
+            mil = is_military(p)
+            radius = mil_km if mil else civ_km
+            e, n = self.home_offset_km(p["lat"], p["lon"])
+            d = math.hypot(e, n)
+            p["_dir"] = compass_direction(e, n)
+            alert = None
+            if d <= radius and p["_dir"] in dirs:
+                alert = {"kind": "now", "dir": p["_dir"], "eta": 0, "dist": d}
             else:
+                gs = p.get("gs")
+                if isinstance(gs, (int, float)) and gs >= 40 and lead > 0:
+                    v = gs * 1.852 / 3600                       # km per second
+                    if d - v * lead <= radius:                  # close enough to get there in time
+                        t_rad = math.radians(p.get("track") or 0)
+                        ve, vn = v * math.sin(t_rad), v * math.cos(t_rad)
+                        for t in range(2, int(lead) + 1, 2):    # walk along the path, 2 s at a time
+                            pe, pn = e + ve * t, n + vn * t
+                            if math.hypot(pe, pn) <= radius and compass_direction(pe, pn) in dirs:
+                                alert = {"kind": "soon", "dir": compass_direction(pe, pn), "eta": t,
+                                         "dist": math.hypot(pe, pn)}
+                                break
+            if alert is None:
                 continue
-            if best is None or (level, -d) > (best[0], -best[2]["_dist_km"]):
-                best = (level, hx, p)
+            rank = (mil, alert["kind"] == "now", -alert["eta"], -d)
+            if best_rank is None or rank > best_rank:
+                p["_alert"] = alert
+                best, best_rank = (2 if mil else 1, hx, p), rank
         return best
+
+    # -- how high to look ------------------------------------------------------------
+    def _start_elevation_lookup(self):
+        """Ground height of your home (m above sea level): config override, cached value, or Open-Meteo."""
+        override = self.cfg.get("home_elevation_m")
+        if isinstance(override, (int, float)):
+            self.home_elev_m = float(override)
+            return
+        lat, lon = self.location.current()
+        key = f"{lat:.3f},{lon:.3f}"                     # about 100 m - close enough for ground height
+        cached = load_prefs().get("elevation", {})
+        if isinstance(cached, dict) and key in cached:
+            self.home_elev_m = float(cached[key])
+            return
+        self.home_elev_m = 0.0
+
+        def work():
+            try:
+                url = f"{ELEVATION_URL}?latitude={lat:.3f}&longitude={lon:.3f}"
+                req = urllib.request.Request(url, headers={"User-Agent": "sky-radar/0.1"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    height = float(json.load(resp)["elevation"][0])
+                self.home_elev_m = height
+                save_prefs(elevation={key: height})
+            except Exception:
+                pass                                     # offline: angles use sea level until next start
+        threading.Thread(target=work, daemon=True).start()
+
+    def _look_up(self, p, dist_km):
+        """Angle above the horizon to look at this plane, as text (e.g. "25\u00b0 UP")."""
+        alt = p.get("alt_geom") if isinstance(p.get("alt_geom"), (int, float)) else p.get("alt_baro")
+        if not isinstance(alt, (int, float)):
+            return ""
+        height = alt * 0.3048 - self.home_elev_m
+        angle = math.degrees(math.atan2(height, max(dist_km, 0.05) * 1000))
+        return "LOW ON THE HORIZON" if angle < 4 else f"{round(angle)}\u00b0 UP"
 
     def _draw_alert(self, level, hx, p, now):
         """Blinking red (military) or yellow (other aircraft) screen, edge ring and a banner."""
         cv = self.canvas
         red = level == 2
         col = ALERT_RED if red else ALERT_YELLOW
+        alert = p.get("_alert") or {"kind": "now", "dir": p.get("_dir"), "eta": 0, "dist": p["_dist_km"]}
+        soon = alert["kind"] == "soon"
         pulse = 0.5 + 0.5 * math.sin(now * (7 if red else 5))
+        strength = 0.45 if soon else 1.0                 # incoming: same colours, calmer blink
         fill = self._alert_fill["red" if red else "yellow"]
-        fill.set_alpha(int((40 + 80 * pulse) if red else (25 + 55 * pulse)))   # red blinks stronger
+        fill.set_alpha(int(((40 + 80 * pulse) if red else (25 + 55 * pulse)) * strength))
         cv.blit(fill, (0, 0))
-        pygame.draw.circle(cv, col, (C, C), C - 14, 12 + int(12 * pulse))
+        pygame.draw.circle(cv, col, (C, C), C - 14, int((12 + 12 * pulse) * (0.5 if soon else 1)))
         cv.blit(self._outside, (0, 0))
 
         info = self.info.get(p)
         d = p["_dist_km"]
-        look = DIRECTION_NAMES.get(p.get("_dir"), "")
-        title = ("MILITARY ALERT" if red else "AIRCRAFT NEARBY") + (f" - LOOK {look}" if look else "")
-        parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
+        where = DIRECTION_NAMES.get(alert["dir"], "")
+        up = self._look_up(p, alert["dist"])
+        if soon:
+            eta = int(alert["eta"])
+            title = f"{'MILITARY' if red else 'AIRCRAFT'} INCOMING - {where} IN {eta // 60}:{eta % 60:02d}"
+            parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away",
+                     f"then look {up.lower()}" if up else ""]
+        else:
+            title = f"{'MILITARY ALERT' if red else 'AIRCRAFT NEARBY'} - LOOK {where}" + (f", {up}" if up else "")
+            parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
         detail = "  |  ".join(x for x in parts if x)
-        w = max(self.fonts[44].size(title)[0], self.fonts[28].size(detail)[0]) + 48
+        tsize = 44 if self.fonts[44].size(title)[0] <= 780 else 34
+        w = max(self.fonts[tsize].size(title)[0], self.fonts[28].size(detail)[0]) + 48
         rect = pygame.Rect(0, 0, w, 100)
         rect.center = (C, 200)
         pygame.draw.rect(cv, (12, 6, 6) if red else (14, 12, 4), rect, border_radius=16)
-        pygame.draw.rect(cv, col, rect, 4, border_radius=16)
-        self.blit_text(title, 44, col, (C, rect.y + 32))
+        pygame.draw.rect(cv, col, rect, 4 if not soon else 2, border_radius=16)
+        self.blit_text(title, tsize, col, (C, rect.y + 32))
         self.blit_text(detail, 28, (240, 245, 245), (C, rect.y + 72))
         self.alert_rect, self.alert_hex = rect, hx
 

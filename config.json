@@ -16,6 +16,8 @@
   "start_range_km": 5,
   "military_alert_km": 5,
   "civil_alert_km": 5,
+  "warning_lead_seconds": 180,
+  "home_elevation_m": null,
 
 
   "map": true,

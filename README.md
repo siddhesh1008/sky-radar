@@ -24,7 +24,11 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 - Dark OpenStreetMap map underneath, cached for offline use
 - **Red screen alert** when a military aircraft is within 5 km of you, **yellow alert** when any other aircraft is within 5 km
   (distances set in `config.json` as `military_alert_km` and `civil_alert_km`). Tap the alert banner to see that plane
-  - The banner says which way to look, e.g. **MILITARY ALERT - LOOK WEST**
+  - The banner says which way and how high to look, e.g. **MILITARY ALERT - LOOK WEST, 25° UP**
+    (angle above the horizon, from the plane's altitude, its distance and your home's ground height)
+  - **Early warning:** Sky Radar follows each plane's speed and heading up to 3 minutes ahead and warns you before
+    it arrives, e.g. **MILITARY INCOMING - WEST IN 1:10**, with a calmer blink. Military beats everything else
+    (`warning_lead_seconds` in `config.json`, 0 turns it off)
   - **Settings → Alert directions:** tap the compass directions you can actually see from (for example only W for a
     west-facing balcony). Planes in the other directions don't trigger alerts. **All** = alerts from every direction
 - Settings on the screen itself (gear button):
@@ -118,6 +122,9 @@ The choice is saved in `location.json`, which is git-ignored, so your address ne
 `lat`/`lon` in `config.json` are only a fallback until a location is chosen.
 
 Only a rounded position (about 1 km) is sent to the flight API.
+For the "how high to look" angle, your home's ground height is looked up once from
+[Open-Meteo](https://open-meteo.com) using a position rounded to about 100 m, then cached in `prefs.json`.
+To skip that, set `home_elevation_m` in `config.json` (metres above sea level).
 
 ## Map
 
@@ -155,7 +162,7 @@ Details are fetched only for the plane you tap, and are cached:
 - Receiving ADS-B is legal in most countries. Be thoughtful about publishing live military movements.
 
 Map data © OpenStreetMap contributors. Flight data from adsb.fi and adsb.lol. Aircraft and route data from adsbdb.com. Flight tracks from the OpenSky Network.
-Address search by Photon (komoot).
+Address search by Photon (komoot). Ground height from Open-Meteo.
 
 ## Contributing
 
