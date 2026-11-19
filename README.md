@@ -24,15 +24,22 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 - Dark OpenStreetMap map underneath, cached for offline use
 - **Red screen alert** when a military aircraft is within 5 km of you, **yellow alert** when any other aircraft is within 5 km
   (distances set in `config.json` as `military_alert_km` and `civil_alert_km`). Tap the alert banner to see that plane
+  - The banner says which way to look, e.g. **MILITARY ALERT - LOOK WEST**
+  - **Settings → Alert directions:** tap the compass directions you can actually see from (for example only W for a
+    west-facing balcony). Planes in the other directions don't trigger alerts. **All** = alerts from every direction
 - Settings on the screen itself (gear button):
   - **Location:** type an address and pick from suggestions as you type
   - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
+  - **Alert directions:** compass to choose which sides (N, NE, E … NW) can trigger alerts
   - **Pinch to zoom:** on/off switch for real multi-touch on the Pi (off = touch works like a mouse)
   - **Screen rotation:** ↺ / ↻ buttons turn the screen 90° at a time. On the Pi the whole screen and touch turn
     and it's remembered after a reboot; on a PC the app turns its own window.
 - First start: if there's no internet it opens Wi-Fi setup, then asks for your location
 
-![Settings screens](docs/settings.png)
+| Alert | Settings |
+|---|---|
+| ![Red military alert telling you to look west](docs/alert.png) | ![Settings, alert directions, location search and Wi-Fi](docs/settings.png) |
+| Red alert for a military jet 3 km away, with the direction to look (example plane) | Settings menu, alert directions (west side selected), location search, Wi-Fi |
 
 Want to hang it on an IKEA Skådis pegboard? There's a 3D-printable enclosure for the display and the Pi 5 in [`hardware/`](hardware/README.md).
 

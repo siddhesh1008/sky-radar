@@ -771,6 +771,86 @@ class WifiScreen:
         pygame.draw.arc(ui.canvas, TEXT_DIM, pygame.Rect(x - 7, cy - 13, 14, 20), 0, math.pi, 3)
 
 
+# --------------------------------------------------------------------------- alert directions
+DIRECTIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+DIRECTION_NAMES = {"N": "NORTH", "NE": "NORTH-EAST", "E": "EAST", "SE": "SOUTH-EAST",
+                   "S": "SOUTH", "SW": "SOUTH-WEST", "W": "WEST", "NW": "NORTH-WEST"}
+
+
+def compass_direction(east_km, north_km):
+    """Which of the 8 compass directions a point lies in, seen from you (each covers 45 degrees)."""
+    bearing = math.degrees(math.atan2(east_km, north_km)) % 360
+    return DIRECTIONS[int(((bearing + 22.5) % 360) // 45)]
+
+
+def describe_directions(dirs):
+    if len(dirs) == len(DIRECTIONS):
+        return "All directions"
+    if not dirs:
+        return "None - alerts are off"
+    return ", ".join(d for d in DIRECTIONS if d in dirs)
+
+
+class DirectionsScreen:
+    """Compass with 8 sections: tap the directions you can see from (e.g. a west-facing balcony)."""
+    CX, CY, R_OUT, R_IN = C, 520, 290, 85
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+
+    def reset(self):
+        pass
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def _toggle(self, d):
+        dirs = set(self.settings.alert_dirs)
+        dirs.symmetric_difference_update({d})
+        self.settings.set_alert_dirs(dirs)
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+        dx, dy = x - self.CX, y - self.CY
+        if self.R_IN <= math.hypot(dx, dy) <= self.R_OUT:
+            self._toggle(compass_direction(dx, -dy))     # screen y grows downwards
+
+    def _pt(self, angle_deg, r):
+        a = math.radians(angle_deg)
+        return (self.CX + r * math.sin(a), self.CY - r * math.cos(a))
+
+    def draw(self, ui, now):
+        self.rects = []
+        dirs = self.settings.alert_dirs
+        draw_screen_bg(ui, "Alert directions", "Tap the directions you can see from")
+        for i, d in enumerate(DIRECTIONS):
+            c = i * 45
+            outer = [self._pt(c - 22.5 + k * 4.5, self.R_OUT) for k in range(11)]
+            inner = [self._pt(c + 22.5 - k * 4.5, self.R_IN) for k in range(11)]
+            on = d in dirs
+            pygame.draw.polygon(ui.canvas, (20, 95, 75) if on else SCOPE_BG, outer + inner)
+            pygame.draw.polygon(ui.canvas, SWEEP if on else RING, outer + inner, 2)
+            ui.blit_text(d, 44 if len(d) == 1 else 34, (240, 245, 245) if on else TEXT_DIM, self._pt(c, (self.R_IN + self.R_OUT) / 2))
+        pygame.draw.circle(ui.canvas, HOME_BLUE, (self.CX, self.CY), 12)       # you, in the middle
+        pygame.draw.circle(ui.canvas, (255, 255, 255), (self.CX, self.CY), 12, 3)
+        ui.blit_text(describe_directions(dirs), 28, TEXT, (C, self.CY + self.R_OUT + 32))
+        for label, x, action in (("All", C - 230, lambda: self.settings.set_alert_dirs(set(DIRECTIONS))),
+                                 ("Done", C + 30, self.settings.done)):
+            rect = pygame.Rect(x, 870, 200, 66)
+            draw_button(ui, rect, label, primary=(label == "Done"))
+            self.rects.append((rect, action))
+
+
 # --------------------------------------------------------------------------- settings menu
 class Settings:
     """Settings menu (gear button) and the first-run setup: Wi-Fi, then location."""
@@ -780,7 +860,9 @@ class Settings:
         self.location = location
         self.cfg = cfg
         self.wifi = FakeWifi() if os.environ.get("SKY_RADAR_FAKE_WIFI") else NmcliWifi()
-        self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self)}
+        self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self)}
+        saved = load_prefs().get("alert_directions", DIRECTIONS)
+        self.alert_dirs = {d for d in saved if d in DIRECTIONS} if isinstance(saved, list) else set(DIRECTIONS)
         self.screen = None            # None = radar, "menu", "location" or "wifi"
         self.flow = []                # remaining first-run steps
         self.from_menu = False
@@ -865,6 +947,10 @@ class Settings:
                                                (px - dx * 3 - nx * 7, py - dy * 3 - ny * 7)])
         return rect
 
+    def set_alert_dirs(self, dirs):
+        self.alert_dirs = set(dirs)
+        save_prefs(alert_directions=[d for d in DIRECTIONS if d in self.alert_dirs])
+
     def _toggle_pinch(self):
         state = multitouch_state()
         if state is not None:
@@ -947,31 +1033,32 @@ class Settings:
             touch_value = "On" if touch else "Off - touch works like a mouse"
         rows = [("Location", self.location.name, lambda: self.show("location")),
                 ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
+                ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
                 ("Pinch to zoom", touch_value, self._toggle_pinch),
                 ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None)]
-        y = 230
+        y = 200
         for title, value, action in rows:
-            rect = pygame.Rect(0, 0, 700, 100)
+            rect = pygame.Rect(0, 0, 700, 92)
             rect.midtop = (C, y)
             pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=14)
             pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
-            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 22), "topleft")
-            ui.blit_text(value[:44], 28, TEXT_DIM, (rect.x + 28, rect.y + 62), "topleft")
+            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 18), "topleft")
+            ui.blit_text(value[:44], 28, TEXT_DIM, (rect.x + 28, rect.y + 56), "topleft")
             if title == "Screen rotation":
                 ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
                 cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
                 self.rects.append((ccw, lambda: self._rotate(-90)))
                 self.rects.append((cw, lambda: self._rotate(90)))
-                y += 120
+                y += 104
                 continue
             if title == "Pinch to zoom" and touch is not None:
                 self._draw_switch(ui, rect.right - 70, rect.centery, touch)
             elif title != "Pinch to zoom":
                 ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
             self.rects.append((rect, action))
-            y += 120
+            y += 104
         close = pygame.Rect(0, 0, 260, 70)
-        close.midtop = (C, 720)
+        close.midtop = (C, 735)
         draw_button(ui, close, "Close", primary=True)
         self.rects.append((close, self.close))
 
@@ -1766,12 +1853,17 @@ class Radar:
 
     def _find_alert(self, aircraft):
         """Most urgent nearby plane: (level, hex, plane). Level 2 = military within military_alert_km (red),
-        level 1 = any other aircraft within civil_alert_km (yellow). Planes on the ground never alert."""
+        level 1 = any other aircraft within civil_alert_km (yellow). Planes on the ground never alert,
+        and only planes in the directions chosen in Settings -> Alert directions count."""
         mil_km = self.cfg.get("military_alert_km", 5)
         civ_km = self.cfg.get("civil_alert_km", 5)
+        dirs = self.settings.alert_dirs
         best = None
         for hx, p in aircraft.items():
             if p.get("alt_baro") == "ground":
+                continue
+            p["_dir"] = compass_direction(*self.home_offset_km(p["lat"], p["lon"]))
+            if p["_dir"] not in dirs:
                 continue
             d = p["_dist_km"]
             if is_military(p) and d <= mil_km:
@@ -1798,7 +1890,8 @@ class Radar:
 
         info = self.info.get(p)
         d = p["_dist_km"]
-        title = "MILITARY ALERT" if red else "AIRCRAFT NEARBY"
+        look = DIRECTION_NAMES.get(p.get("_dir"), "")
+        title = ("MILITARY ALERT" if red else "AIRCRAFT NEARBY") + (f" - LOOK {look}" if look else "")
         parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
         detail = "  |  ".join(x for x in parts if x)
         w = max(self.fonts[44].size(title)[0], self.fonts[28].size(detail)[0]) + 48
