@@ -190,7 +190,7 @@ To try the Wi-Fi screens on a PC, start with `SKY_RADAR_FAKE_WIFI=1`. That shows
 2. Update the Pi from your PC. It downloads the new version, installs anything new and restarts
    the radar on its screen, with no reboot needed:
    ```
-   ssh sky-radar@sky-radar.local "python3 ~/sky-radar/run.py --update"
+   ssh jarvis@jarvis.local "python3 ~/sky-radar/run.py --update"
    ```
    Use your own username and hostname if you chose different ones in Raspberry Pi Imager.
    On the Pi itself (keyboard or terminal) it's just `python3 ~/sky-radar/run.py --update`.

@@ -15,7 +15,7 @@ It checks which system it is on and then:
 Options:
     --update                download the newest version from GitHub (git pull), set up anything new,
                             and on a Pi restart the radar on its screen. From another computer:
-                              ssh sky-radar@sky-radar.local "python3 ~/sky-radar/run.py --update"
+                              ssh jarvis@jarvis.local "python3 ~/sky-radar/run.py --update"
     --setup-only            set everything up, but don't start the app
     (while it runs, a watchdog restarts Sky Radar if it crashes or freezes)
     --windowed              start in a window, even on a Pi
