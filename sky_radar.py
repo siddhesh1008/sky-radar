@@ -14,7 +14,9 @@ First start: if there is no internet it opens Wi-Fi setup, then asks for a locat
 import json
 import math
 import os
+import bisect
 import queue
+import tempfile
 import re
 import shutil
 import socket
@@ -61,6 +63,31 @@ WARN = (240, 149, 149)
 PATH_BLUE = (70, 150, 255)       # where the selected plane has been
 ROUTE_WHITE = (235, 240, 240)    # where it is going
 HOME_BLUE = (66, 133, 244)       # your location dot
+PANEL_BG = (2, 20, 17)           # dark boxes behind text
+MAP_TINT = (110, 190, 170)       # colour the street map is tinted with
+THEMES = {
+    "green": dict(SCOPE_BG=(4, 30, 26), RING=(15, 110, 86), GRID=(8, 70, 56), SWEEP=(93, 202, 165),
+                  CIVIL=(159, 225, 203), CIVIL_DIM=(29, 120, 95), TEXT=(159, 225, 203), TEXT_DIM=(29, 158, 117),
+                  PANEL_BG=(2, 20, 17), MAP_TINT=(110, 190, 170), HOME_BLUE=(66, 133, 244),
+                  MIL=(240, 120, 90), MIL_DIM=(140, 60, 40), SELECT=(250, 199, 117)),
+    "amber": dict(SCOPE_BG=(28, 18, 4), RING=(130, 88, 18), GRID=(78, 52, 10), SWEEP=(245, 180, 70),
+                  CIVIL=(252, 214, 150), CIVIL_DIM=(140, 98, 32), TEXT=(252, 214, 150), TEXT_DIM=(196, 142, 56),
+                  PANEL_BG=(18, 12, 3), MAP_TINT=(210, 160, 80), HOME_BLUE=(90, 170, 255),
+                  MIL=(255, 110, 80), MIL_DIM=(150, 55, 35), SELECT=(255, 240, 190)),
+    "blue": dict(SCOPE_BG=(4, 14, 30), RING=(30, 78, 150), GRID=(14, 42, 88), SWEEP=(100, 170, 245),
+                 CIVIL=(175, 212, 250), CIVIL_DIM=(50, 98, 160), TEXT=(175, 212, 250), TEXT_DIM=(95, 140, 205),
+                 PANEL_BG=(3, 9, 20), MAP_TINT=(110, 150, 225), HOME_BLUE=(120, 220, 255),
+                 MIL=(250, 120, 90), MIL_DIM=(140, 60, 40), SELECT=(250, 210, 120)),
+    "red": dict(SCOPE_BG=(18, 0, 0), RING=(105, 12, 10), GRID=(58, 6, 5), SWEEP=(205, 40, 30),
+                CIVIL=(225, 80, 64), CIVIL_DIM=(115, 24, 18), TEXT=(225, 80, 64), TEXT_DIM=(150, 36, 28),
+                PANEL_BG=(12, 0, 0), MAP_TINT=(170, 45, 35), HOME_BLUE=(255, 120, 80),
+                MIL=(255, 170, 80), MIL_DIM=(150, 90, 30), SELECT=(255, 220, 150)),
+}
+THEME_NAMES = {"green": "Green (classic)", "amber": "Amber", "blue": "Blue", "red": "Red (keeps your night vision)"}
+
+
+def set_theme(name):
+    globals().update(THEMES.get(name, THEMES["green"]))
 ALERT_RED = (235, 50, 50)        # military aircraft close to you
 ALERT_YELLOW = (250, 200, 60)    # any other aircraft very close to you
 
@@ -283,7 +310,7 @@ def draw_button(ui, rect, label, primary=False, size=28):
 def draw_screen_bg(ui, title, subtitle=""):
     cv = ui.canvas
     cv.fill(BLACK)
-    pygame.draw.circle(cv, (2, 20, 17), (C, C), C)
+    pygame.draw.circle(cv, PANEL_BG, (C, C), C)
     pygame.draw.circle(cv, RING, (C, C), C - 2, 2)
     ui.blit_text(title, 44, TEXT, (C, 150))
     if subtitle:
@@ -608,6 +635,22 @@ class FakeWifi:
             self.connected = ssid
             return True, f"Connected to {ssid}"
         return False, "Wrong password. Check it and try again."
+
+
+HEARTBEAT_FILE = os.path.join(tempfile.gettempdir(), "sky-radar-heartbeat")
+WATCHDOG_FILE = os.path.join(HERE, "watchdog.json")
+
+
+def watchdog_label():
+    if not os.environ.get("SKY_RADAR_WATCHDOG"):
+        return "Off - start Sky Radar with run.py to turn it on"
+    try:
+        with open(WATCHDOG_FILE, encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        return "On - no restarts needed"
+    when = time.strftime("%d %b ", time.localtime(info.get("last", 0))) + fmt_clock(info.get("last", 0))
+    return f"On - restarted {info.get('restarts', 0)}x, last {when} ({info.get('reason', '?')})"
 
 
 def internet_ok(timeout=3):
@@ -1224,6 +1267,148 @@ class FeedStatusScreen:
         self.rects.append((rect, self.settings.done))
 
 
+class PlacesScreen:
+    """Saved places: switch the radar centre with one tap (up to 6)."""
+    MAX = 6
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+        self.removing = False
+
+    def reset(self):
+        self.removing = False
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+
+    @staticmethod
+    def places():
+        saved = load_prefs().get("places", [])
+        return saved if isinstance(saved, list) else []
+
+    def _save_current(self):
+        loc = self.settings.location
+        lat, lon = loc.current()
+        places = [pl for pl in self.places() if pl.get("name") != loc.name][:self.MAX - 1]
+        places.insert(0, {"name": loc.name, "lat": lat, "lon": lon})
+        save_prefs(places=places)
+
+    def _use(self, pl):
+        if self.removing:
+            save_prefs(places=[x for x in self.places() if x != pl])
+            return
+        self.settings.location.set(pl["lat"], pl["lon"], pl["name"])
+        self.settings.done()
+
+    def _toggle_remove(self):
+        self.removing = not self.removing
+
+    def draw(self, ui, now):
+        self.rects = []
+        places = self.places()
+        draw_screen_bg(ui, "Saved places", "Tap one to remove it" if self.removing else "Tap a place to move the radar there")
+        cur = self.settings.location.name
+        y = 230
+        for pl in places:
+            rect = pygame.Rect(0, 0, 720, 70)
+            rect.midtop = (C, y)
+            on = pl.get("name") == cur
+            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
+            pygame.draw.rect(ui.canvas, WARN if self.removing else (SWEEP if on else RING), rect, 2 if on or self.removing else 1,
+                             border_radius=12)
+            ui.blit_text(pl.get("name", "?")[:36], 34, SELECT if on else TEXT, (rect.x + 24, rect.centery), "midleft")
+            ui.blit_text("remove" if self.removing else ("current" if on else ">"), 28 if self.removing or on else 44,
+                         WARN if self.removing else SWEEP, (rect.right - 30, rect.centery), "midright")
+            self.rects.append((rect, lambda pl=pl: self._use(pl)))
+            y += 80
+        if not places:
+            ui.blit_text("No saved places yet.", 28, TEXT_DIM, (C, 420))
+            ui.blit_text("Save the current one, or pick a new location first.", 24, TEXT_DIM, (C, 456))
+        buttons = [("Back", self.settings.done, True), ("Save current", self._save_current, False)]
+        if places:
+            buttons.append(("Done removing" if self.removing else "Remove", self._toggle_remove, False))
+        x = C - (len(buttons) * 210 + (len(buttons) - 1) * 12) // 2
+        for label, action, primary in buttons:
+            rect = pygame.Rect(x, 760, 210, 64)
+            draw_button(ui, rect, label, primary=primary)
+            self.rects.append((rect, action))
+            x += 222
+
+
+class TrafficScreen:
+    """Planes and military jets within 50 km of you over the last 24 hours."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+
+    def reset(self):
+        pass
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+
+    def draw(self, ui, now):
+        self.rects = []
+        samples = [smp for smp in ui.traffic if now - smp[0] <= 86400]
+        draw_screen_bg(ui, "Traffic", "Aircraft within 50 km of you, last 24 hours")
+        x0, y0, w, h = C - 330, 300, 660, 330
+        pygame.draw.rect(ui.canvas, SCOPE_BG, pygame.Rect(x0 - 10, y0 - 10, w + 20, h + 50), border_radius=12)
+        if not samples:
+            ui.blit_text("Collecting data - check back in a little while.", 28, TEXT_DIM, (C, y0 + h // 2))
+        else:
+            buckets = [[0, 0] for _ in range(48)]               # 30-minute bars, newest on the right
+            for ts, total, mil in samples:
+                b = 47 - int((now - ts) // 1800)
+                if 0 <= b < 48:
+                    buckets[b][0] = max(buckets[b][0], total)
+                    buckets[b][1] = max(buckets[b][1], mil)
+            peak = max(1, max(t for t, _ in buckets))
+            bw = w / 48
+            for i, (total, mil) in enumerate(buckets):
+                th = int(h * total / peak)
+                mh = int(h * mil / peak) if mil else 0
+                pygame.draw.rect(ui.canvas, CIVIL_DIM, pygame.Rect(x0 + i * bw, y0 + h - th, bw - 2, th))
+                if mil:
+                    pygame.draw.rect(ui.canvas, MIL, pygame.Rect(x0 + i * bw, y0 + h - max(mh, 4), bw - 2, max(mh, 4)))
+            for hours_ago in (24, 18, 12, 6, 0):
+                x = x0 + w - hours_ago * 2 * bw
+                ui.blit_text(fmt_clock(now - hours_ago * 3600), 22, TEXT_DIM, (x, y0 + h + 22))
+            busiest = max(range(48), key=lambda i: buckets[i][0])
+            ui.blit_text(f"Peak: {buckets[busiest][0]} aircraft around {fmt_clock(now - (47 - busiest) * 1800)}"
+                         f"   |   military seen: {sum(1 for b in buckets if b[1])} half-hours", 24, TEXT, (C, 255))
+            ui.blit_text("teal = all aircraft   coral = military", 22, TEXT_DIM, (C, y0 + h + 58))
+        rect = pygame.Rect(0, 0, 220, 64)
+        rect.midtop = (C, 760)
+        draw_button(ui, rect, "Back", primary=True)
+        self.rects.append((rect, self.settings.done))
+
+
 # --------------------------------------------------------------------------- settings menu
 class Settings:
     """Settings menu (gear button) and the first-run setup: Wi-Fi, then location."""
@@ -1235,7 +1420,10 @@ class Settings:
         self.wifi = FakeWifi() if os.environ.get("SKY_RADAR_FAKE_WIFI") else NmcliWifi()
         self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self),
                         "sightings": SightingsScreen(self), "airport": AirportScreen(self),
-                        "feed": FeedStatusScreen(self)}
+                        "feed": FeedStatusScreen(self), "places": PlacesScreen(self), "traffic": TrafficScreen(self)}
+        prefs = load_prefs()
+        self.max_alt = int(prefs.get("max_alt_ft", 0) or 0)            # 0 = show all heights
+        self.theme = prefs.get("theme", "green") if prefs.get("theme") in THEMES else "green"
         self.text_large = load_prefs().get("text_size") == "large"
         self.night_mode = load_prefs().get("night_mode", "off")      # "off", "dim" or "blank"
         self.menu_page = 0
@@ -1334,6 +1522,24 @@ class Settings:
         nxt = UNIT_PRESETS[(UNIT_PRESETS.index(cur) + 1) % len(UNIT_PRESETS)] if cur in UNIT_PRESETS else UNIT_PRESETS[0]
         set_units(*nxt)
         save_prefs(units=list(nxt))
+
+    def _cycle_height(self):
+        order = [0, 10000, 5000]
+        self.max_alt = order[(order.index(self.max_alt) + 1) % 3] if self.max_alt in order else 0
+        save_prefs(max_alt_ft=self.max_alt)
+
+    def height_label(self):
+        return "All heights" if not self.max_alt else f"Only planes below {fmt_alt_ft(self.max_alt)} (and their alerts)"
+
+    def _cycle_theme(self):
+        names = list(THEMES)
+        self.theme = names[(names.index(self.theme) + 1) % len(names)]
+        save_prefs(theme=self.theme)
+        self.ui.apply_theme(self.theme)
+
+    def _start_replay(self):
+        self.close()
+        self.ui.start_replay()
 
     def _toggle_text(self):
         self.text_large = not self.text_large
@@ -1449,25 +1655,40 @@ class Settings:
         else:
             touch_value = "On" if touch else "Off - touch works like a mouse"
         health, updater = self.ui.health, self.ui.updater
-        if self.menu_page == 0:
+        page = self.menu_page
+        if page == 0:
+            n_places = len(PlacesScreen.places())
             rows = [("Location", self.location.name, lambda: self.show("location")),
+                    ("Saved places", f"{n_places} saved" if n_places else "Save places to switch quickly", lambda: self.show("places")),
                     ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
                     ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
-                    ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
+                    ("Night mode", self.night_label(), self._cycle_night)]
+        elif page == 1:
+            hist = self.ui.feed.history if self.ui.feed else []
+            rows = [("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
                      lambda: self.show("sightings")),
                     ("Airport board", self._airport_label(), lambda: self.show("airport")),
-                    ("Night mode", self.night_label(), self._cycle_night)]
-        else:
+                    ("Traffic", "Aircraft around you over the last 24 hours", lambda: self.show("traffic")),
+                    ("Replay", f"Rewind up to {max(1, round((time.time() - hist[0][0]) / 60)) if hist else 0} min"
+                     if hist else "Nothing recorded yet", self._start_replay if hist else None)]
+        elif page == 2:
             rows = [("Pinch to zoom", touch_value, self._toggle_pinch),
                     ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None),
                     ("Units", units_label(), self._cycle_units),
                     ("Text size", "Large" if self.text_large else "Normal", self._toggle_text),
-                    ("Pi health", health.label(), None),
+                    ("Colour theme", THEME_NAMES[self.theme], self._cycle_theme),
+                    ("Height filter", self.height_label(), self._cycle_height)]
+        else:
+            rows = [("Pi health", health.label(), None),
+                    ("Crash watchdog", watchdog_label(), None),
                     ("Auto updates", updater.label(), updater.toggle if updater.available else None),
-                    ("Feed status", self._feed_label(), lambda: self.show("feed"))]
-        draw_screen_bg(ui, "Settings" if self.menu_page == 0 else "Settings - display and system")
+                    ("Feed status", self._feed_label(), lambda: self.show("feed")),
+                    ("Offline map", self.ui.map.offline_label() if self.ui.map else "Map is off",
+                     self.ui.map.save_offline if self.ui.map else None)]
+        titles = ["Settings", "Settings - views", "Settings - display", "Settings - system"]
+        draw_screen_bg(ui, titles[page])
         y = 180
-        step = min(104, (810 - y) // len(rows))      # more rows -> slightly slimmer rows
+        step = min(104, (790 - y) // len(rows))      # more rows -> slightly slimmer rows
         for title, value, action in rows:
             rect = pygame.Rect(0, 0, 700, step - 10)
             rect.midtop = (C, y)
@@ -1494,16 +1715,20 @@ class Settings:
                 ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
             if action is not None:
                 self.rects.append((rect, action))
-        if self.menu_page == 0:
-            buttons = [("Close", self.close, True), ("More >", lambda: self._page(1), False)]
-        else:
-            buttons = [("< Back", lambda: self._page(0), False), ("Close", self.close, True)]
-        x = C - (2 * 220 + 16) // 2
+        buttons = []
+        if page > 0:
+            buttons.append(("< Back", lambda: self._page(page - 1), False))
+        buttons.append(("Close", self.close, True))
+        if page < 3:
+            buttons.append(("More >", lambda: self._page(page + 1), False))
+        ui.blit_text(f"Page {page + 1} of 4", 22, TEXT_DIM, (C, y + 4))
+        width = 200 if len(buttons) == 3 else 220
+        x = C - (len(buttons) * width + (len(buttons) - 1) * 14) // 2
         for label, action, primary in buttons:
-            rect = pygame.Rect(x, y + 8, 220, 62)
+            rect = pygame.Rect(x, y + 22, width, 62)
             draw_button(ui, rect, label, primary=primary)
             self.rects.append((rect, action))
-            x += 236
+            x += width + 14
 
 
 # --------------------------------------------------------------------------- data feed
@@ -1525,6 +1750,7 @@ class Feed:
         self.stats = {}           # source name -> {"ok": time, "error": text, "error_at": time, "today": n, "day": date}
         self.source = ""
         self.count = 0
+        self.history = []         # [(time, {hex: plane})] for the last 30 minutes (replay)
         self.view = None          # set by the radar: () -> (lat, lon, radius_nm) of what is on screen
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -1583,6 +1809,15 @@ class Feed:
                 source, data = self._fetch()
                 planes = data.get("ac") or data.get("aircraft") or []
                 self.source, self.count = source, len(planes)
+                keep = ("hex", "flight", "r", "t", "category", "dbFlags", "lat", "lon", "alt_baro", "alt_geom",
+                        "gs", "track", "squawk")
+                snap = {pl["hex"].lower(): {k: pl[k] for k in keep if k in pl}
+                        for pl in planes if pl.get("hex") and "lat" in pl and "lon" in pl}
+                with self.lock:
+                    self.history.append((time.time(), snap))
+                    cutoff = time.time() - 30 * 60
+                    while self.history and self.history[0][0] < cutoff:
+                        self.history.pop(0)
                 positioned, mil_no_pos = {}, []
                 for p in planes:
                     hx = p.get("hex", "").lower()
@@ -1610,6 +1845,22 @@ class Feed:
                     self.status = f"No flight data ({str(e)[:60]}), retrying"
             self.wake.wait(self.cfg["poll_seconds"])   # wakes early when the location changes
             self.wake.clear()
+
+    def history_at(self, t):
+        """(aircraft at time t, trails for the 3 minutes before it) from the replay history."""
+        with self.lock:
+            hist = list(self.history)
+        if not hist:
+            return {}, {}
+        times = [h[0] for h in hist]
+        i = max(0, bisect.bisect_right(times, t) - 1)
+        aircraft = {k: dict(v) for k, v in hist[i][1].items()}
+        trails = {}
+        for ts, snap in hist[max(0, i - 36):i + 1]:
+            for hx, pl in snap.items():
+                if hx in aircraft:
+                    trails.setdefault(hx, []).append((pl["lat"], pl["lon"]))
+        return aircraft, trails
 
     def snapshot(self):
         with self.lock:
@@ -1687,6 +1938,48 @@ class MapLayer:
             if missing:   # offline or a tile failed: try this range again later
                 threading.Timer(60, self._retry, args=(r,)).start()
 
+    def offline_label(self):
+        st = getattr(self, "offline", None)
+        if not st:
+            return "Tap to save the map around home for offline use"
+        if st["state"] == "saving":
+            return f"Saving... {st['done']} of {st['total']} tiles"
+        return f"Saved: {st['done']} of {st['total']} tiles (home view, every zoom)" + (
+            f", {st['failed']} failed" if st["failed"] else "")
+
+    def save_offline(self):
+        """Download the tiles for the home view at every zoom step. Kept modest on purpose: OpenStreetMap's
+        tile policy doesn't allow bulk-downloading whole regions."""
+        if getattr(self, "offline", None) and self.offline["state"] == "saving":
+            return
+        center = self.location.current()
+        jobs = set()
+        for r in self.cfg["ranges_km"]:
+            lat, lon = center
+            lat_r = math.radians(lat)
+            want = R / r
+            z = max(3, min(19, round(math.log2(want * self.EARTH_KM * math.cos(lat_r) / 256))))
+            n = 2 ** z
+            f = want / (256 * n / (self.EARTH_KM * math.cos(lat_r)))
+            wx = (lon + 180) / 360 * 256 * n
+            wy = (1 - math.asinh(math.tan(lat_r)) / math.pi) / 2 * 256 * n
+            hw = C / f                     # just what the round screen shows at home
+            for tx in range(int((wx - hw) // 256), int((wx + hw) // 256) + 1):
+                for ty in range(int((wy - hw) // 256), int((wy + hw) // 256) + 1):
+                    jobs.add((z, tx % n, ty))
+        self.offline = {"state": "saving", "done": 0, "total": len(jobs), "failed": 0}
+
+        def work():
+            for z, x, y in sorted(jobs):
+                try:
+                    self._tile(z, x, y)
+                except Exception:
+                    self.offline["failed"] += 1
+                else:
+                    self.offline["done"] += 1
+            self.offline["state"] = "done"
+        threading.Thread(target=work, daemon=True).start()
+
     def _retry(self, r):
         with self.lock:
             self._queue(r)
@@ -1732,7 +2025,7 @@ class MapLayer:
         night = pygame.Surface((size, size))
         night.fill((255, 255, 255))
         night.blit(scaled, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
-        night.fill((110, 190, 170), special_flags=pygame.BLEND_RGB_MULT)
+        night.fill(MAP_TINT, special_flags=pygame.BLEND_RGB_MULT)
         night.set_alpha(self.alpha)
         final = pygame.Surface((size, size))   # opaque, so drawing it each frame is cheap
         final.fill(SCOPE_BG)
@@ -1792,6 +2085,17 @@ def fmt_alt(p):
     if isinstance(alt, (int, float)):
         return fmt_alt_ft(alt)
     return "?"
+
+
+SIZE_FACTOR = {"four": 1.5, "jet": 1.0, "fighter": 0.75, "heli": 0.55, "light": 0.5}   # how big it looks
+NOISE_AT_300M = {"fighter": 108, "four": 98, "jet": 92, "heli": 88, "light": 78}      # rough dB, 300 m away
+
+
+def loudness_words(db):
+    for limit, words in ((85, "very loud"), (75, "loud"), (62, "audible"), (50, "faint")):
+        if db >= limit:
+            return words
+    return "silent"
 
 
 # --------------------------------------------------------------------------- aircraft details
@@ -2327,6 +2631,15 @@ class Radar:
         self.weather = Weather(location)
         self.health = PiHealth()
         self.airports = Airports()
+        self.replay = None                     # {"t": time shown, "playing": bool, "last": frame time}
+        self.replay_rects = []
+        try:
+            with open(os.path.join(HERE, "traffic.json"), encoding="utf-8") as f:
+                self.traffic = [tuple(x) for x in json.load(f)]
+        except (OSError, ValueError):
+            self.traffic = []
+        self._traffic_at = 0.0
+        self.apply_theme(self.settings.theme)
         self.updater = AutoUpdater(self)
         self.auto = None                       # auto-zoom state while an alert is on
         self.wake_until = 0.0                 # night mode: a touch wakes the screen for a minute
@@ -2353,6 +2666,112 @@ class Radar:
     @property
     def range_km(self):
         return self.live_range or self.ranges[self.range_idx]
+
+    def apply_theme(self, name):
+        set_theme(name)
+        self._text_cache.clear()
+        self._halo = pygame.Surface((64, 64), pygame.SRCALPHA)
+        pygame.draw.circle(self._halo, (*HOME_BLUE, 60), (32, 32), 30)
+        if self.map:
+            with self.map.lock:
+                self.map.surfaces.clear()          # rebuilt in the new colours
+
+    def start_replay(self):
+        if self.feed and self.feed.history:
+            oldest = self.feed.history[0][0]
+            self.replay = {"t": max(oldest, time.time() - 10 * 60), "playing": False, "last": time.time()}
+
+    def spotting(self, p, dist_km):
+        """("Easy to see" ... "Not visible", "silent" ... "very loud") for a plane at this distance from you."""
+        alt = p.get("alt_geom") if isinstance(p.get("alt_geom"), (int, float)) else p.get("alt_baro")
+        if not isinstance(alt, (int, float)):
+            return "", ""
+        h_km = max(0.0, alt * 0.3048 - self.home_elev_m) / 1000
+        slant = math.hypot(dist_km, h_km)
+        kind = aircraft_kind(p)
+        big = 1.3 if kind == "jet" and (p.get("category") or "").upper() == "A5" else 1.0
+        angle = math.degrees(math.atan2(h_km, max(dist_km, 0.05)))
+        sun = getattr(self, "sun", None)
+        cloud, vis_km = self.weather.cloud, self.weather.visibility_km
+        eff = slant / (SIZE_FACTOR.get(kind, 1.0) * big)
+        if angle < 2:
+            seen = "Not visible (too low)"
+        elif isinstance(vis_km, (int, float)) and slant > vis_km:
+            seen = "Not visible (haze)"
+        elif sun and sun[1] < -6:
+            seen = "Lights only" if eff < 30 else "Not visible"
+        elif isinstance(cloud, (int, float)) and cloud >= 90 and alt > 4000:
+            seen = "Hard to see (overcast)"
+        else:
+            seen = "Easy to see" if eff < 4 else "Visible" if eff < 10 else "Hard to see" if eff < 22 else "Not visible"
+        db = NOISE_AT_300M.get(kind, 92) + (3 if big > 1 else 0) - 20 * math.log10(max(slant * 1000, 100) / 300) \
+            - 0.004 * max(0.0, slant * 1000 - 300)
+        return seen, loudness_words(db)
+
+    def _replay_controls(self, now):
+        """Slider and buttons at the bottom while replaying."""
+        rp = self.replay
+        hist = self.feed.history if self.feed else []
+        if not hist:
+            self.replay = None
+            return
+        t0, t1 = hist[0][0], hist[-1][0]
+        if rp["playing"]:
+            rp["t"] += (now - rp["last"]) * 10              # 10x speed
+            if rp["t"] >= t1:
+                self.replay = None
+                return
+        rp["last"] = now
+        self.replay_rects = []
+        bar = pygame.Rect(C - 300, 790, 600, 14)
+        pygame.draw.rect(self.canvas, PANEL_BG, bar.inflate(24, 70).move(0, 22), border_radius=16)
+        pygame.draw.rect(self.canvas, RING, bar, border_radius=7)
+        frac = (rp["t"] - t0) / max(1.0, t1 - t0)
+        pygame.draw.circle(self.canvas, SELECT, (bar.x + frac * bar.width, bar.centery), 13)
+        self.replay_rects.append((bar.inflate(0, 40), "seek"))
+        x = C - (4 * 130 + 3 * 10) // 2
+        for label, action in (("-1 min", "back"), ("Pause" if rp["playing"] else "Play", "play"), ("+1 min", "fwd"), ("Live", "live")):
+            rect = pygame.Rect(x, 820, 130, 52)
+            draw_button(self, rect, label, primary=(action == "live"), size=28)
+            self.replay_rects.append((rect, action))
+            x += 140
+        ago = (time.time() - rp["t"]) / 60
+        self.blit_text(f"REPLAY  {fmt_clock(rp['t'])}   ({ago:.0f} min ago)", 34, SELECT, (C, 160), bg=PANEL_BG)
+
+    def _replay_tap(self, x, y):
+        rp = self.replay
+        hist = self.feed.history if self.feed else []
+        if not rp or not hist:
+            return False
+        t0, t1 = hist[0][0], hist[-1][0]
+        for rect, action in self.replay_rects:
+            if rect.collidepoint(x, y):
+                if action == "seek":
+                    rp["t"] = t0 + (t1 - t0) * min(1.0, max(0.0, (x - (C - 300)) / 600))
+                elif action == "back":
+                    rp["t"] = max(t0, rp["t"] - 60)
+                elif action == "fwd":
+                    rp["t"] = min(t1, rp["t"] + 60)
+                elif action == "play":
+                    rp["playing"] = not rp["playing"]
+                elif action == "live":
+                    self.replay = None
+                return True
+        return False
+
+    def _sample_traffic(self, aircraft, now):
+        """Every 5 minutes: how many planes (and military) are within 50 km of you. Kept for 24 h."""
+        if now - self._traffic_at < 300 or not aircraft:
+            return
+        self._traffic_at = now
+        near = [p for p in aircraft.values() if p.get("_dist_km", 999) <= 50]
+        self.traffic.append((now, len(near), sum(1 for p in near if is_military(p))))
+        self.traffic = [t for t in self.traffic if now - t[0] <= 86400]
+        try:
+            with open(os.path.join(HERE, "traffic.json"), "w", encoding="utf-8") as f:
+                json.dump(self.traffic, f)
+        except OSError:
+            pass
 
     def _user_took_over(self):
         if self.auto:
@@ -2525,6 +2944,8 @@ class Radar:
         if self.settings.active:
             self.settings.tap(x, y)
             return
+        if self.replay and self._replay_tap(x, y):
+            return
         if math.hypot(x - self.btn_home[0], y - self.btn_home[1]) < 45:
             self.recenter()
             return
@@ -2575,6 +2996,10 @@ class Radar:
             return cv
         self.text_scale = 1.25 if self.settings.text_large else 1.0
         aircraft, mil_no_pos, trails, status, last_ok = feed.snapshot()
+        replaying = self.replay is not None
+        if replaying:
+            aircraft, trails = feed.history_at(self.replay["t"])
+            mil_no_pos, status = [], "Replay - alerts paused"
         self.home_lat, self.home_lon = self.location.current()
         self._sync_feed(feed, now)
         cv.fill(BLACK)
@@ -2596,8 +3021,11 @@ class Radar:
         for hx, p in aircraft.items():
             hx_, hy_ = self.home_offset_km(p["lat"], p["lon"])
             p["_dist_km"] = math.hypot(hx_, hy_)            # distance from you (the blue dot)
-            if is_military(p) and p["_dist_km"] <= self.sightings.radius:
+            if is_military(p) and p["_dist_km"] <= self.sightings.radius and not replaying:
                 self.sightings.record(p, self.info.get(p)["model"], compass_direction(hx_, hy_), now)
+            alt = p.get("alt_baro")
+            if self.settings.max_alt and isinstance(alt, (int, float)) and alt > self.settings.max_alt:
+                continue                                    # height filter: hidden from the map and alerts
             dx, dy = self.offset_km(p["lat"], p["lon"])
             if math.hypot(dx, dy) > self.range_km:          # outside the circle on screen
                 continue
@@ -2627,21 +3055,27 @@ class Radar:
         cv.blit(self._outside, (0, 0))    # trim map, paths and labels to the round screen
 
         self.sightings.maybe_save(now)
+        if not replaying:
+            self._sample_traffic(aircraft, now)
         self.alert_rect, self.alert_hex = None, None
-        alert = self._find_alert(aircraft)
+        shown = aircraft if not self.settings.max_alt else {
+            h: p for h, p in aircraft.items()
+            if not (isinstance(p.get("alt_baro"), (int, float)) and p["alt_baro"] > self.settings.max_alt)}
+        alert = None if replaying else self._find_alert(shown)
         self._mil_alert = bool(alert and alert[0] == 2)
         self._auto_zoom(alert, now)
         if alert:
             self._draw_alert(*alert, now)
 
         # HUD
-        hud_bg = (2, 20, 17)
+        hud_bg = PANEL_BG
         place = self.location.name
         clouds = self.weather.label()
         if self.weather.contrails:
             self.blit_text(f"Contrails: {self.weather.contrails}", 24, TEXT_DIM, (C, 136), bg=hud_bg)
         self.blit_text(f"{place}  {fmt_clock()}" + (f"  |  {clouds}" if clouds else ""), 34, TEXT, (C, 100), bg=hud_bg)
-        summary = f"{len(in_range)} aircraft  |  {mil_count} military  |  {fmt_dist(self.range_km)}"
+        summary = f"{len(in_range)} aircraft  |  {mil_count} military  |  {fmt_dist(self.range_km)}" + (
+            f"  |  < {fmt_alt_ft(self.settings.max_alt)}" if self.settings.max_alt else "")
         self.blit_text(summary, 34, TEXT, (C, 930), bg=hud_bg)
         if mil_no_pos:
             self.blit_text(f"+{len(mil_no_pos)} military heard, no position", 28, MIL, (C, 893), bg=hud_bg)
@@ -2656,6 +3090,8 @@ class Radar:
             self.blit_text("Loading map...", 24, TEXT_DIM, (C, 1000))
 
         self._draw_buttons()
+        if replaying:
+            self._replay_controls(now)
         self.card_rect = None
         if self.selected:
             scale, self.text_scale = self.text_scale, 1.0      # the details card has a fixed layout
@@ -2926,7 +3362,9 @@ class Radar:
             title = f"{'MILITARY ALERT' if red else 'AIRCRAFT NEARBY'} - LOOK {where}" + (f", {up}" if up else "")
             parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
         detail = "  |  ".join(x for x in parts if x)
-        hint = "" if emergency else "  |  ".join(h for h in (self._sun_glare(p, alert["dist"]), self.weather.spotting_hint()) if h)
+        seen, loud = self.spotting(p, alert["dist"]) if not emergency else ("", "")
+        rating = ", ".join(x for x in (seen.lower(), loud) if x)
+        hint = "" if emergency else "  |  ".join(h for h in (rating, self._sun_glare(p, alert["dist"]), self.weather.spotting_hint()) if h)
         tsize = 44 if self.font(44).size(title)[0] <= 780 else 34
         w = min(1000, max(self.font(tsize).size(title)[0], self.font(28).size(detail)[0], self.font(24).size(hint)[0]) + 48)
         rect = pygame.Rect(0, 0, w, 128 if hint else 100)
@@ -3099,19 +3537,19 @@ class Radar:
             top_y = self.alert_rect.bottom + 30 if self.alert_rect else 180      # stay clear of an alert banner
             rect = self.text(label, 24, col).get_rect(center=(C, top_y if at_top else 845)).inflate(28, 18)
             self.card_rect = rect
-            pygame.draw.rect(cv, (2, 20, 17), rect, border_radius=12)
+            pygame.draw.rect(cv, PANEL_BG, rect, border_radius=12)
             pygame.draw.rect(cv, col, rect, 2, border_radius=12)
             self.blit_text(label, 24, col, rect.center)
             return
 
         loading = info["state"] == "loading"
-        rect = pygame.Rect(0, 0, 480, 140 if mil else 196)
+        rect = pygame.Rect(0, 0, 480, 166 if mil else 222)
         if at_top:
             rect.midtop = (C, self.alert_rect.bottom + 12 if self.alert_rect else 158)   # below an alert banner
         else:
             rect.midbottom = (C, 878)
         self.card_rect = rect
-        pygame.draw.rect(cv, (2, 20, 17), rect, border_radius=14)
+        pygame.draw.rect(cv, PANEL_BG, rect, border_radius=14)
         pygame.draw.rect(cv, col, rect, 2, border_radius=14)
         x0, x1, y = rect.x + 18, rect.right - 18, rect.y + 12
 
@@ -3119,15 +3557,19 @@ class Radar:
         model = info["model"] or ("Looking up..." if loading else ("Type not broadcast" if mil else "Unknown type"))
         self.blit_text(model[:26], 34, col, (x0, y), "topleft")
         if mil:
-            badge = self.text("MILITARY", 20, (2, 20, 17)).get_rect(topright=(x1, y + 4))
+            badge = self.text("MILITARY", 20, PANEL_BG).get_rect(topright=(x1, y + 4))
             pygame.draw.rect(cv, MIL, badge.inflate(12, 6), border_radius=6)
-            cv.blit(self.text("MILITARY", 20, (2, 20, 17)), badge)
+            cv.blit(self.text("MILITARY", 20, PANEL_BG), badge)
         y += 32
 
         # operator / airline + callsign
         who = info["operator"] or ("" if loading else ("Unknown operator" if mil else "Unknown airline"))
         self.blit_text("  |  ".join(x for x in (who[:30], callsign(p)) if x), 24, TEXT, (x0, y), "topleft")
         y += 28
+        seen, loud = self.spotting(p, p.get("_dist_km", 0))
+        if seen:
+            self.blit_text(f"{seen}  |  {loud}", 24, SELECT, (x0, y), "topleft")
+            y += 26
 
         if not mil:                       # route: FROM ---> TO
             o, d = info.get("origin"), info.get("dest")
@@ -3181,6 +3623,7 @@ def main():
     location = Location(cfg)
     feed = Feed(cfg, location)
     radar = Radar(cfg, location)
+    last_beat = 0.0
 
     while True:
         sw, sh = screen.get_size()
@@ -3252,6 +3695,13 @@ def main():
             screen.blit(pygame.transform.smoothscale(canvas, (side, side)), (ox, oy))
         pygame.display.flip()
         clock.tick(cfg.get("fps", 30))
+        if time.time() - last_beat > 10:                   # "still alive" for run.py's watchdog
+            last_beat = time.time()
+            try:
+                with open(HEARTBEAT_FILE, "w") as f:
+                    f.write(str(last_beat))
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

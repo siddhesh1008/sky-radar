@@ -17,6 +17,7 @@ Options:
                             and on a Pi restart the radar on its screen. From another computer:
                               ssh sky-radar@sky-radar.local "python3 ~/sky-radar/run.py --update"
     --setup-only            set everything up, but don't start the app
+    (while it runs, a watchdog restarts Sky Radar if it crashes or freezes)
     --windowed              start in a window, even on a Pi
     --no-autostart          don't add Sky Radar to the Pi's autostart
     --keep-touch-emulation  leave the Pi's touch settings as they are (pinch-to-zoom won't work)
@@ -26,8 +27,11 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import time
 import venv
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +39,8 @@ VENV = os.path.join(HERE, ".venv")
 REQUIREMENTS = os.path.join(HERE, "requirements.txt")
 STAMP = os.path.join(VENV, ".requirements.sha256")
 IS_WINDOWS = os.name == "nt"
+HEARTBEAT_FILE = os.path.join(tempfile.gettempdir(), "sky-radar-heartbeat")   # touched by the app every 10 s
+WATCHDOG_FILE = os.path.join(HERE, "watchdog.json")
 IS_LINUX = sys.platform.startswith("linux")
 
 
@@ -167,9 +173,31 @@ def update_from_github():
         fail("git pull failed (see above). Files changed by hand in this folder can block it.")
 
 
+def _other_launchers():
+    """PIDs of other run.py processes for this folder (their watchdog would otherwise restart the old app)."""
+    me, target = os.getpid(), os.path.join(HERE, "run.py")
+    pids = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as f:
+                argv = f.read().decode(errors="ignore").split("\0")
+        except OSError:
+            continue
+        if argv and "python" in os.path.basename(argv[0]) and target in argv and "--update" not in argv:
+            pids.append(int(entry))
+    return pids
+
+
 def restart_on_screen():
     """Stop the radar that is running and start the new version in the Pi's desktop session,
     so an update works over SSH too."""
+    for pid in _other_launchers():
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
     subprocess.call(["pkill", "-f", os.path.join(HERE, "sky_radar.py")])
     env = os.environ.copy()
     runtime = env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -223,10 +251,59 @@ def main():
     if IS_LINUX and env.get("WAYLAND_DISPLAY") and "SDL_VIDEODRIVER" not in env:
         # Native Wayland (not the X11 layer): needed to receive real multi-finger touch for pinch-to-zoom
         env["SDL_VIDEODRIVER"] = "wayland"
-    say("Starting Sky Radar ...")
-    code = subprocess.call([venv_python(), os.path.join(HERE, "sky_radar.py")] + args, env=env)
-    if code != 0:
-        fail(f"Sky Radar stopped with an error (code {code}).")
+    env["SKY_RADAR_WATCHDOG"] = "1"
+    run_with_watchdog([venv_python(), os.path.join(HERE, "sky_radar.py")] + args, env)
+
+
+def _note_restart(reason):
+    try:
+        with open(WATCHDOG_FILE, encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        info = {"restarts": 0}
+    info.update(restarts=info.get("restarts", 0) + 1, last=time.time(), reason=reason)
+    try:
+        with open(WATCHDOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(info, f)
+    except OSError:
+        pass
+
+
+def run_with_watchdog(cmd, env):
+    """Start Sky Radar and keep it running: if it crashes, or stops updating its heartbeat for 90 s
+    (frozen), restart it. Closing it normally (Esc / Q / window close) ends the watchdog too."""
+    recent = []
+    while True:
+        say("Starting Sky Radar ...")
+        started = time.time()
+        proc = subprocess.Popen(cmd, env=env)
+        reason = None
+        while True:
+            try:
+                code = proc.wait(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                try:
+                    age = time.time() - os.path.getmtime(HEARTBEAT_FILE)
+                except OSError:
+                    age = time.time() - started
+                if time.time() - started > 60 and age > 90:
+                    say("Sky Radar stopped responding - restarting it.")
+                    proc.kill()
+                    proc.wait()
+                    code, reason = None, "froze"
+                    break
+        if code == 0:
+            return                                   # closed on purpose
+        if code is not None and code < 0 and -code in (signal.SIGTERM, signal.SIGINT):
+            return                                   # stopped on purpose (update, shutdown, Ctrl+C)
+        reason = reason or f"crashed, code {code}"
+        _note_restart(reason)
+        recent = [t for t in recent if time.time() - t < 120] + [time.time()]
+        if len(recent) > 5:
+            fail("Sky Radar keeps crashing (5 times in 2 minutes). Check the messages above.")
+        say(f"Sky Radar {reason} - restarting in 3 s.")
+        time.sleep(3)
 
 
 if __name__ == "__main__":

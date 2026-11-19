@@ -17,6 +17,9 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   (A400M, C-17, AWACS, 747 …), small light aircraft and airliners, so you recognise what's coming at a glance
 
   <img src="docs/shapes.png" width="360" alt="Aircraft shapes: fighter, four-engine transport, helicopter, light aircraft, airliner">
+- **"Can I see it?" and "Will I hear it?":** every alert and details card rates how easy the plane is to spot from
+  the ground, from its distance, height, size, the cloud cover and the time of day (Easy to see · Visible ·
+  Hard to see · Lights only at night · Not visible), plus a rough loudness estimate (e.g. "very loud", "faint", "silent")
 - Tap a plane for a small details card. It appears on the half of the screen away from the plane, so the plane stays visible:
   - **Civil:** model (e.g. Airbus A320neo), airline, from → to, altitude, speed in knots, and arrival time at the destination
   - **Military:** model (e.g. Eurofighter Typhoon, F-35, Rafale), operator, altitude, speed,
@@ -60,28 +63,49 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   radar if the Pi gets too hot inside the enclosure
 - **Automatic updates (Pi):** optional nightly check at 03:00. If there's a new version on GitHub, it installs it
   and restarts by itself, never during an alert
+- **Replay:** scroll back through the last 30 minutes with a slider, step a minute at a time or play it back at 10×
+  speed. Useful when you heard a jet but missed it. Alerts pause while replaying; **Live** goes back
+- **Traffic chart:** how many planes were within 50 km, every 30 minutes over the last 24 hours, with military
+  aircraft shown separately (stored on the device in `traffic.json`)
+- **Height filter:** show only planes below 10,000 ft or 5,000 ft, which hides the airliners cruising high above
+  and keeps the low, visible ones. Alerts follow the filter too
+- **Colour themes:** green (classic), amber, blue, or red, which keeps your night vision when you're outside in the dark
+- **Saved places:** keep up to 6 locations (home, a holiday spot, an airshow) and switch between them with one tap
+- **Offline map:** download the map around your location for every zoom step in one go, so it works without internet
+- **Crash watchdog (Pi):** `run.py` keeps an eye on the app. If it crashes or freezes, it restarts it within a few
+  seconds and notes it in Settings. If it keeps crashing, it gives up instead of looping
 - **Units:** km or miles, feet or metres, 24 h or 12 h clock (speeds stay in knots)
 - **Large text:** labels, info lines and alert banners about 25% bigger, for reading the radar from across the room
 - **Feed status:** which flight-data service is in use, when it last answered, requests today, and which ones are
   rate-limited or resting
 - **Night mode:** dims the screen or switches it off at night (22:00–07:00 by default, `night_start` / `night_end`).
   A touch wakes it for a minute, and **military alerts always wake it**
-- Settings on the screen itself (gear button), on two pages:
-  - **Location:** type an address and pick from suggestions as you type
-  - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
-  - **Alert directions:** compass to choose which sides (N, NE, E … NW) can trigger alerts
-  - **Sightings:** the list of military aircraft seen near you, with Best times and Records
-  - **Airport board:** arrivals and departures at your nearest airports
-  - **Night mode:** tap to switch between Off, Dim at night and Screen off at night
-  - **More >** (display and system):
+- Settings on the screen itself (gear button), on four pages (**< Back** / **More >** to move between them):
+  - **General**
+    - **Location:** type an address and pick from suggestions as you type
+    - **Saved places:** save the current location, switch to a saved one, or remove it
+    - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
+    - **Alert directions:** compass to choose which sides (N, NE, E … NW) can trigger alerts
+    - **Night mode:** tap to switch between Off, Dim at night and Screen off at night
+  - **Views**
+    - **Sightings:** the list of military aircraft seen near you, with Best times and Records
+    - **Airport board:** arrivals and departures at your nearest airports
+    - **Traffic:** the 24-hour traffic chart
+    - **Replay:** the last 30 minutes
+  - **Display**
     - **Pinch to zoom:** on/off switch for real multi-touch on the Pi (off = touch works like a mouse)
     - **Screen rotation:** ↺ / ↻ buttons turn the screen 90° at a time. On the Pi the whole screen and touch turn
       and it's remembered after a reboot; on a PC the app turns its own window.
     - **Units:** tap to switch between km · ft · 24 h, km · m · 24 h, mi · ft · 12 h and mi · ft · 24 h
     - **Text size:** Normal or Large
+    - **Colour theme:** Green, Amber, Blue or Red
+    - **Height filter:** All heights, below 10,000 ft or below 5,000 ft
+  - **System**
     - **Pi health:** temperature, fan and throttling status
+    - **Crash watchdog:** whether it's on and when it last restarted the app
     - **Auto updates:** on/off switch for the nightly update
     - **Feed status:** health of the flight-data services
+    - **Offline map:** how much of the map is saved, tap to download the rest
 - First start: if there's no internet it opens Wi-Fi setup, then asks for your location
 
 ![Alerts: incoming military jet, military jet in your zone, emergency squawk](docs/alerts.png)
@@ -92,8 +116,12 @@ overcast. The small sun on the edge shows where the sun is.*
 
 ![Settings, alert directions, sightings, location search and Wi-Fi](docs/settings.png)
 
-*Settings (both pages), alert directions (west side selected), sightings log and best times (example entries),
-airport board (live), feed status, location search, Wi-Fi.*
+*Settings (all four pages), alert directions (west side selected), replay, the 24-hour traffic chart (example data)
+and saved places.*
+
+![Colour themes: green, amber, blue, red](docs/themes.png)
+
+*The four colour themes. Red keeps your eyes adjusted to the dark.*
 
 Want to hang it on an IKEA Skådis pegboard? There's a 3D-printable enclosure for the display and the Pi 5 in [`hardware/`](hardware/README.md).
 
@@ -153,7 +181,7 @@ To try the Wi-Fi screens on a PC, start with `SKY_RADAR_FAKE_WIFI=1`. That shows
 
 If the update says `git pull failed`, a file in `~/sky-radar` on the Pi was edited by hand.
 Undo those edits with `cd ~/sky-radar && git checkout -- .` and run the update again.
-Your `location.json` and `prefs.json` are never touched by updates.
+Your `location.json`, `prefs.json` and other personal files are never touched by updates.
 
 ### Wi-Fi
 
@@ -176,13 +204,15 @@ For the "how high to look" angle, your home's ground height is looked up once fr
 [Open-Meteo](https://open-meteo.com) using a position rounded to about 100 m, then cached in `prefs.json`.
 To skip that, set `home_elevation_m` in `config.json` (metres above sea level).
 Cloud cover comes from Open-Meteo too, using a position rounded to about 1 km.
-Your sightings log (`sightings.json`) and settings (`prefs.json`) stay on the device and are git-ignored.
+Your sightings log (`sightings.json`), traffic history (`traffic.json`), settings and saved places (`prefs.json`)
+stay on the device and are git-ignored.
 
 ## Map
 
 The map uses OpenStreetMap tiles, recoloured dark. Tiles are downloaded once into `map_tiles/` (git-ignored)
 and work offline after that. `map_brightness` (0–1) in `config.json` sets how strong the map looks, and `"map": false` turns it off.
-Please keep usage light, following the [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/).
+**Settings → Offline map** downloads every tile for the view around your location at every zoom step (around
+750 tiles, a few minutes, once). Please keep usage light, following the [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/).
 
 ## Own receiver (optional RTL-SDR dongle)
 
