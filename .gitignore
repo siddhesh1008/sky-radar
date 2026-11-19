@@ -1,6 +1,7 @@
 # Your own data: chosen location and cached map tiles around it
 location.json
 sightings.json
+airports.json
 map_tiles/
 
 __pycache__/

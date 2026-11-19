@@ -13,13 +13,17 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   automatic backup, or from your own RTL-SDR receiver. If one service is busy or rate-limited, Sky Radar
   switches to the other by itself. The list is `api_urls` in `config.json`
 - Military aircraft in coral, civil aircraft in teal, with trails and heading
+- **Aircraft shapes by type:** delta-wing fighters, helicopters with a turning rotor, four-engine heavies
+  (A400M, C-17, AWACS, 747 …), small light aircraft and airliners, so you recognise what's coming at a glance
+
+  <img src="docs/shapes.png" width="360" alt="Aircraft shapes: fighter, four-engine transport, helicopter, light aircraft, airliner">
 - Tap a plane for a small details card. It appears on the half of the screen away from the plane, so the plane stays visible:
   - **Civil:** model (e.g. Airbus A320neo), airline, from → to, altitude, speed in knots, and arrival time at the destination
   - **Military:** model (e.g. Eurofighter Typhoon, F-35, Rafale), operator, altitude, speed,
     and when it will be closest to you. Military flights don't publish a destination.
   - The selected plane's path: **blue** = where it has flown (from takeoff), **white dashed** = the way to its destination
     (civil only). Tap the card to shrink it to a bar so the whole path is visible, and tap again to open it.
-- Drag to move around the map and pinch to zoom, like Google Maps. Your location is a blue dot, and the crosshair button brings you back
+- Drag to move around the map, pinch or double-tap to zoom, like Google Maps. Your location is a blue dot, and the crosshair button brings you back
 - 12 zoom steps from a 50 m radius to 150 km
 - Dark OpenStreetMap map underneath, cached for offline use
 - **Red screen alert** when a military aircraft is within 5 km of you, **yellow alert** when any other aircraft is within 5 km
@@ -33,6 +37,9 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
     west-facing balcony). Planes in the other directions don't trigger alerts. **All** = alerts from every direction
   - **Weather check:** cloud cover from Open-Meteo is shown at the top ("clouds 85%"), and alerts add
     "Cloudy - it may be hidden" when the sky is overcast or visibility is poor
+  - **Contrail forecast:** a line under the top bar says whether planes at cruising height leave long trails,
+    short trails or none today (temperature and humidity at ~34,000 ft from Open-Meteo). Long trails make high jets
+    much easier to spot
   - **Sun and glare:** a small sun on the edge of the radar shows where the sun is. If the plane will be within 20°
     of the sun from your home, the alert adds "Near the sun - shade your eyes"
   - **Auto-zoom:** during an alert the map pans and zooms by itself so you and the plane (and where it will enter
@@ -45,11 +52,18 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   Stored only on the device in `sightings.json` (`sightings_km` in `config.json`)
   - **Best times:** a weekday × time-of-day chart of when jets passed, e.g. "Most often: Thu, 10:00-12:00"
   - **Records:** closest pass, lowest altitude, most-seen type, busiest day and totals
+- **Airport board:** live arrivals and departures at your nearest airport (and the next two), worked out from the
+  planes around it: airline, model, from/to and minutes. The airport list comes from OurAirports and is downloaded
+  once (`airports.json`). Because it's estimated from flight paths, a plane landing at a small field nearby can
+  occasionally show up as an arrival
 - **Pi health:** CPU temperature, cooler fan speed and power/overheat throttling in Settings, plus a warning on the
   radar if the Pi gets too hot inside the enclosure
 - **Automatic updates (Pi):** optional nightly check at 03:00. If there's a new version on GitHub, it installs it
   and restarts by itself, never during an alert
 - **Units:** km or miles, feet or metres, 24 h or 12 h clock (speeds stay in knots)
+- **Large text:** labels, info lines and alert banners about 25% bigger, for reading the radar from across the room
+- **Feed status:** which flight-data service is in use, when it last answered, requests today, and which ones are
+  rate-limited or resting
 - **Night mode:** dims the screen or switches it off at night (22:00–07:00 by default, `night_start` / `night_end`).
   A touch wakes it for a minute, and **military alerts always wake it**
 - Settings on the screen itself (gear button), on two pages:
@@ -57,14 +71,17 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   - **Wi-Fi:** choose a network and enter the password on the on-screen keyboard
   - **Alert directions:** compass to choose which sides (N, NE, E … NW) can trigger alerts
   - **Sightings:** the list of military aircraft seen near you, with Best times and Records
+  - **Airport board:** arrivals and departures at your nearest airports
   - **Night mode:** tap to switch between Off, Dim at night and Screen off at night
   - **More >** (display and system):
     - **Pinch to zoom:** on/off switch for real multi-touch on the Pi (off = touch works like a mouse)
     - **Screen rotation:** ↺ / ↻ buttons turn the screen 90° at a time. On the Pi the whole screen and touch turn
       and it's remembered after a reboot; on a PC the app turns its own window.
     - **Units:** tap to switch between km · ft · 24 h, km · m · 24 h, mi · ft · 12 h and mi · ft · 24 h
+    - **Text size:** Normal or Large
     - **Pi health:** temperature, fan and throttling status
     - **Auto updates:** on/off switch for the nightly update
+    - **Feed status:** health of the flight-data services
 - First start: if there's no internet it opens Wi-Fi setup, then asks for your location
 
 ![Alerts: incoming military jet, military jet in your zone, emergency squawk](docs/alerts.png)
@@ -75,8 +92,8 @@ overcast. The small sun on the edge shows where the sun is.*
 
 ![Settings, alert directions, sightings, location search and Wi-Fi](docs/settings.png)
 
-*Settings (both pages), alert directions (west side selected), sightings log with best times and records
-(example entries), location search, Wi-Fi.*
+*Settings (both pages), alert directions (west side selected), sightings log and best times (example entries),
+airport board (live), feed status, location search, Wi-Fi.*
 
 Want to hang it on an IKEA Skådis pegboard? There's a 3D-printable enclosure for the display and the Pi 5 in [`hardware/`](hardware/README.md).
 
@@ -197,7 +214,7 @@ Details are fetched only for the plane you tap, and are cached:
 - Receiving ADS-B is legal in most countries. Be thoughtful about publishing live military movements.
 
 Map data © OpenStreetMap contributors. Flight data from adsb.fi and adsb.lol. Aircraft and route data from adsbdb.com. Flight tracks from the OpenSky Network.
-Address search by Photon (komoot). Ground height and weather from Open-Meteo.
+Address search by Photon (komoot). Ground height, weather and contrail data from Open-Meteo. Airport list from OurAirports.
 
 ## Contributing
 

@@ -64,6 +64,38 @@ HOME_BLUE = (66, 133, 244)       # your location dot
 ALERT_RED = (235, 50, 50)        # military aircraft close to you
 ALERT_YELLOW = (250, 200, 60)    # any other aircraft very close to you
 
+FIGHTER_SHAPE = [(0, -16), (3, -6), (4, 0), (13, 10), (13, 13), (4, 10), (3, 12), (6, 15), (6, 16),
+                 (-6, 16), (-6, 15), (-3, 12), (-4, 10), (-13, 13), (-13, 10), (-4, 0), (-3, -6)]
+HEAVY_SHAPE = [(0, -17), (3, -8), (19, 1), (19, 4), (3, 1), (2, 12), (7, 16), (7, 18), (0, 16),
+               (-7, 18), (-7, 16), (-2, 12), (-3, 1), (-19, 4), (-19, 1), (-3, -8)]
+HEAVY_ENGINES = [(-13, 1), (-7, -2), (7, -2), (13, 1)]
+LIGHT_SHAPE = [(0, -10), (2, -6), (12, -5), (12, -2), (2, -2), (1, 6), (4, 8), (4, 9), (-4, 9), (-4, 8),
+               (-1, 6), (-2, -2), (-12, -2), (-12, -5), (-2, -6)]
+HELI_SHAPE = [(0, -8), (4, -4), (4, 4), (1, 7), (1, 14), (3, 15), (-3, 15), (-1, 14), (-1, 7), (-4, 4), (-4, -4)]
+FIGHTER_TYPES = {"EUFI", "RFAL", "F35", "F22", "F16", "F15", "F15E", "F18", "F18H", "F18S", "TOR", "GRIF", "JAS39",
+                 "MIR2", "A10", "HAWK", "M346", "T38", "AJET", "PC21", "F5", "MG29", "SU27", "SU30", "SU35", "J35"}
+HELI_TYPES = {"H60", "NH90", "H47", "EC35", "EC45", "TIGR", "LYNX", "A139", "H64", "EC30", "EC55", "AS32", "AS65",
+              "A169", "A189", "H135", "H145", "B06", "R44", "R22", "S92", "EH10", "MI8", "UH1"}
+FOUR_ENGINE_TYPES = {"A400", "C17", "C5M", "K35R", "E3TF", "E3CF", "B744", "B748", "B74S", "A388", "A343", "A346",
+                     "R135", "C130", "C30J", "P3", "A124", "AN22", "IL76", "B52", "E6", "C160"}
+LIGHT_TYPES = {"C172", "C152", "C182", "C206", "P28A", "DA40", "DA42", "SR22", "PC12", "BE20", "C208", "DR40", "TBM9"}
+
+
+def aircraft_kind(p):
+    """What the icon should look like: fighter, heli, four (4-engine heavy), light or jet."""
+    cat = (p.get("category") or "").upper()
+    t = (p.get("t") or "").upper()
+    if t in FIGHTER_TYPES or cat == "A6":
+        return "fighter"
+    if t in HELI_TYPES or cat == "A7":
+        return "heli"
+    if t in FOUR_ENGINE_TYPES:
+        return "four"
+    if t in LIGHT_TYPES or cat in ("A1", "B1", "B4"):
+        return "light"
+    return "jet"
+
+
 PLANE_SHAPE = [(0, -14), (3, -5), (14, 2), (14, 5), (3, 2), (2, 10), (6, 14), (6, 16),
                (0, 14), (-6, 16), (-6, 14), (-2, 10), (-3, 2), (-14, 5), (-14, 2), (-3, -5)]
 
@@ -977,6 +1009,221 @@ class SightingsScreen:
         self._buttons(ui, buttons)
 
 
+AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+AIRPORTS_FILE = os.path.join(HERE, "airports.json")       # downloaded once, git-ignored
+
+
+class Airports:
+    """Airports with scheduled flights (OurAirports, public domain), downloaded once and kept in airports.json."""
+
+    def __init__(self):
+        self.list, self.state = None, "idle"
+
+    def ensure(self):
+        if self.list is not None or self.state == "loading":
+            return
+        try:
+            with open(AIRPORTS_FILE, encoding="utf-8") as f:
+                self.list = json.load(f)
+            return
+        except (OSError, ValueError):
+            pass
+        self.state = "loading"
+        threading.Thread(target=self._download, daemon=True).start()
+
+    def _download(self):
+        import csv
+        try:
+            req = urllib.request.Request(AIRPORTS_URL, headers={"User-Agent": "sky-radar/0.1"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                rows = csv.DictReader(io_text(resp.read()))
+            keep = [[r["iata_code"], r["name"], r["municipality"], float(r["latitude_deg"]), float(r["longitude_deg"])]
+                    for r in rows if r["type"] in ("large_airport", "medium_airport")
+                    and r["scheduled_service"] == "yes" and r["iata_code"]]
+            with open(AIRPORTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(keep, f)
+            self.list, self.state = keep, "ready"
+        except Exception as e:
+            self.state = f"failed ({type(e).__name__})"
+
+    def nearest(self, lat, lon, n=3):
+        if not self.list:
+            return []
+        return sorted(self.list, key=lambda a: great_circle_km(lat, lon, a[3], a[4]))[:n]
+
+
+def io_text(raw):
+    import io
+    return io.StringIO(raw.decode("utf-8", "replace"))
+
+
+class AirportScreen:
+    """Live arrivals and departures at the nearest airports, worked out from the planes around it."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+        self.index = 0
+
+    def reset(self):
+        self.index = 0
+        self.settings.ui.airports.ensure()
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+
+    def _next(self):
+        self.index = (self.index + 1) % 3
+
+    @staticmethod
+    def board(airport, aircraft):
+        """(arrivals, departures): lists of (minutes, plane), arrivals soonest first, departures latest first."""
+        _, _, _, alat, alon = airport
+        arrivals, departures = [], []
+        for p in aircraft.values():
+            if "lat" not in p:
+                continue
+            d = great_circle_km(p["lat"], p["lon"], alat, alon)
+            alt, gs = p.get("alt_baro"), p.get("gs") or 0
+            rate = p.get("baro_rate") if isinstance(p.get("baro_rate"), (int, float)) else p.get("geom_rate") or 0
+            if alt == "ground" or not isinstance(alt, (int, float)) or alt > 18000 or gs < 60 or d > 90:
+                continue
+            to_airport = math.degrees(math.atan2(math.radians(alon - p["lon"]) * math.cos(math.radians(alat)),
+                                                 math.radians(alat - p["lat"]))) % 360
+            off = abs((p.get("track") or 0) - to_airport) % 360
+            off = min(off, 360 - off)
+            minutes = d / (gs * 1.852 / 60)
+            if off < 60 and (rate <= -200 or alt < 6000):
+                arrivals.append((minutes * 1.15, p))
+            elif off > 100 and rate >= 300 and d < 60:
+                departures.append((minutes, p))
+        return sorted(arrivals, key=lambda m: m[0])[:3], sorted(departures, key=lambda m: m[0])[:3]
+
+    def _row(self, ui, y, minutes, p, arriving):
+        info = ui.info.get(p)
+        rect = pygame.Rect(0, 0, 760, 58)
+        rect.midtop = (C, y)
+        pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
+        pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=12)
+        who = info.get("operator") or ""
+        ui.blit_text(f"{callsign(p)}  {who}"[:34], 28, SELECT, (rect.x + 18, rect.y + 7), "topleft")
+        when = f"in {max(1, round(minutes))} min" if arriving else f"{max(1, round(minutes))} min ago"
+        ui.blit_text(when, 28, TEXT, (rect.right - 18, rect.y + 7), "topright")
+        place = info.get("origin") if arriving else info.get("dest")
+        where = f"{'from' if arriving else 'to'} {place['code']} {place['city']}" if place else "route not known"
+        ui.blit_text(f"{where}  |  {info.get('model') or p.get('t') or ''}  |  {fmt_alt(p)}"[:66], 22, TEXT_DIM,
+                     (rect.x + 18, rect.y + 35), "topleft")
+
+    def draw(self, ui, now):
+        self.rects = []
+        airports = ui.airports
+        lat, lon = ui.location.current()
+        near = airports.nearest(lat, lon)
+        if not near:
+            draw_screen_bg(ui, "Airport board")
+            msg = "Downloading the airport list (once)..." if airports.state in ("loading", "idle") else \
+                f"Couldn't load the airport list: {airports.state}"
+            ui.blit_text(msg, 28, TEXT_DIM, (C, 450))
+        else:
+            ap = near[self.index % len(near)]
+            dist = great_circle_km(lat, lon, ap[3], ap[4])
+            draw_screen_bg(ui, f"{ap[0]}  {ap[1]}"[:34], f"{fmt_dist(round(dist))} away  |  live, from planes around it")
+            aircraft = ui.feed.snapshot()[0] if ui.feed else {}
+            arrivals, departures = self.board(ap, aircraft)
+            ui.blit_text("Arriving", 28, TEXT, (C - 380, 222), "midleft")
+            y = 242
+            for minutes, p in arrivals:
+                self._row(ui, y, minutes, p, True)
+                y += 64
+            if not arrivals:
+                ui.blit_text("No arrivals in the next minutes", 24, TEXT_DIM, (C, 280))
+                y = 320
+            ui.blit_text("Departed", 28, TEXT, (C - 380, y + 22), "midleft")
+            y += 42
+            for minutes, p in departures:
+                self._row(ui, y, minutes, p, False)
+                y += 64
+            if not departures:
+                ui.blit_text("No recent departures", 24, TEXT_DIM, (C, y + 38))
+        x = C - (2 * 220 + 16) // 2
+        for label, action, primary in (("Back", self.settings.done, True), ("Next airport", self._next, False)):
+            rect = pygame.Rect(x, 760, 220, 64)
+            draw_button(ui, rect, label, primary=primary)
+            self.rects.append((rect, action))
+            x += 236
+
+
+class FeedStatusScreen:
+    """Which flight-data services Sky Radar uses and how they are doing."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+
+    def reset(self):
+        pass
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+
+    def draw(self, ui, now):
+        self.rects = []
+        feed = ui.feed
+        draw_screen_bg(ui, "Feed status", f"{feed.count if feed else 0} aircraft in the last update  |  every {ui.cfg['poll_seconds']} s")
+        y = 240
+        for name, _ in (feed._sources() if feed else []):
+            st = feed.stats.get(name, {})
+            rest = feed.resting.get(name, 0) - now
+            if name == feed.source and now - st.get("ok", 0) < 3 * ui.cfg["poll_seconds"]:
+                state, col = f"In use - last update {int(now - st['ok'])} s ago", SWEEP
+            elif rest > 0:
+                state, col = f"Rate-limited - resting for {fmt_duration(rest / 3600)}", WARN
+            elif st.get("error"):
+                state, col = f"Problem: {st['error']} ({fmt_duration((now - st['error_at']) / 3600)} ago)", WARN
+            elif st.get("ok"):
+                state, col = "OK - standby", TEXT_DIM
+            else:
+                state, col = "Backup - not needed yet", TEXT_DIM
+            rect = pygame.Rect(0, 0, 760, 92)
+            rect.midtop = (C, y)
+            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
+            pygame.draw.rect(ui.canvas, col if col != TEXT_DIM else RING, rect, 2 if col != TEXT_DIM else 1, border_radius=12)
+            ui.blit_text(name, 34, TEXT, (rect.x + 22, rect.y + 12), "topleft")
+            ui.blit_text(f"{st.get('today', 0)} requests today", 24, TEXT_DIM, (rect.right - 22, rect.y + 16), "topright")
+            ui.blit_text(state, 28, col, (rect.x + 22, rect.y + 54), "topleft")
+            y += 104
+        ui.blit_text("The first service that answers is used. If one is busy or rate-limited,", 24, TEXT_DIM, (C, y + 20))
+        ui.blit_text("Sky Radar switches to the next one by itself.", 24, TEXT_DIM, (C, y + 48))
+        rect = pygame.Rect(0, 0, 220, 64)
+        rect.midtop = (C, 760)
+        draw_button(ui, rect, "Back", primary=True)
+        self.rects.append((rect, self.settings.done))
+
+
 # --------------------------------------------------------------------------- settings menu
 class Settings:
     """Settings menu (gear button) and the first-run setup: Wi-Fi, then location."""
@@ -987,7 +1234,9 @@ class Settings:
         self.cfg = cfg
         self.wifi = FakeWifi() if os.environ.get("SKY_RADAR_FAKE_WIFI") else NmcliWifi()
         self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self),
-                        "sightings": SightingsScreen(self)}
+                        "sightings": SightingsScreen(self), "airport": AirportScreen(self),
+                        "feed": FeedStatusScreen(self)}
+        self.text_large = load_prefs().get("text_size") == "large"
         self.night_mode = load_prefs().get("night_mode", "off")      # "off", "dim" or "blank"
         self.menu_page = 0
         u = load_prefs().get("units")
@@ -1085,6 +1334,23 @@ class Settings:
         nxt = UNIT_PRESETS[(UNIT_PRESETS.index(cur) + 1) % len(UNIT_PRESETS)] if cur in UNIT_PRESETS else UNIT_PRESETS[0]
         set_units(*nxt)
         save_prefs(units=list(nxt))
+
+    def _toggle_text(self):
+        self.text_large = not self.text_large
+        save_prefs(text_size="large" if self.text_large else "normal")
+
+    def _feed_label(self):
+        feed = self.ui.feed
+        if not feed or not getattr(feed, "source", ""):
+            return "Waiting for the first update"
+        age = int(time.time() - feed.stats.get(feed.source, {}).get("ok", time.time()))
+        return f"{feed.source}, updated {age} s ago" + (" (rate-limited services resting)" if any(
+            t > time.time() for t in feed.resting.values()) else "")
+
+    def _airport_label(self):
+        lat, lon = self.location.current()
+        near = self.ui.airports.nearest(lat, lon, 1)
+        return f"{near[0][0]} {near[0][1]}" if near else "Live arrivals and departures"
 
     def _page(self, n):
         self.menu_page = n
@@ -1189,33 +1455,38 @@ class Settings:
                     ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
                     ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
                      lambda: self.show("sightings")),
+                    ("Airport board", self._airport_label(), lambda: self.show("airport")),
                     ("Night mode", self.night_label(), self._cycle_night)]
         else:
             rows = [("Pinch to zoom", touch_value, self._toggle_pinch),
                     ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None),
                     ("Units", units_label(), self._cycle_units),
+                    ("Text size", "Large" if self.text_large else "Normal", self._toggle_text),
                     ("Pi health", health.label(), None),
-                    ("Auto updates", updater.label(), updater.toggle if updater.available else None)]
+                    ("Auto updates", updater.label(), updater.toggle if updater.available else None),
+                    ("Feed status", self._feed_label(), lambda: self.show("feed"))]
         draw_screen_bg(ui, "Settings" if self.menu_page == 0 else "Settings - display and system")
-        y = 200
+        y = 180
+        step = min(104, (810 - y) // len(rows))      # more rows -> slightly slimmer rows
         for title, value, action in rows:
-            rect = pygame.Rect(0, 0, 700, 92)
+            rect = pygame.Rect(0, 0, 700, step - 10)
             rect.midtop = (C, y)
             pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=14)
             pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
-            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 18), "topleft")
+            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + (step - 10) * 0.16), "topleft")
             warn = title == "Pi health" and health.hot()
-            ui.blit_text(value[:48], 28, WARN if warn else TEXT_DIM, (rect.x + 28, rect.y + 56), "topleft")
-            y += 104
+            ui.blit_text(value[:48], 28, WARN if warn else TEXT_DIM, (rect.x + 28, rect.y + (step - 10) * 0.57), "topleft")
+            y += step
             if title == "Screen rotation":
                 ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
                 cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
                 self.rects.append((ccw, lambda: self._rotate(-90)))
                 self.rects.append((cw, lambda: self._rotate(90)))
                 continue
-            if title == "Pinch to zoom":
-                if touch is not None:
-                    self._draw_switch(ui, rect.right - 70, rect.centery, touch)
+            if title in ("Pinch to zoom", "Text size"):
+                on = touch if title == "Pinch to zoom" else self.text_large
+                if on is not None:
+                    self._draw_switch(ui, rect.right - 70, rect.centery, on)
             elif title == "Auto updates":
                 if updater.available:
                     self._draw_switch(ui, rect.right - 70, rect.centery, updater.enabled)
@@ -1229,7 +1500,7 @@ class Settings:
             buttons = [("< Back", lambda: self._page(0), False), ("Close", self.close, True)]
         x = C - (2 * 220 + 16) // 2
         for label, action, primary in buttons:
-            rect = pygame.Rect(x, 735, 220, 66)
+            rect = pygame.Rect(x, y + 8, 220, 62)
             draw_button(ui, rect, label, primary=primary)
             self.rects.append((rect, action))
             x += 236
@@ -1251,6 +1522,9 @@ class Feed:
         self.status = "Connecting..."
         self.last_ok = 0.0
         self.resting = {}         # source name -> time until which it asked us to wait
+        self.stats = {}           # source name -> {"ok": time, "error": text, "error_at": time, "today": n, "day": date}
+        self.source = ""
+        self.count = 0
         self.view = None          # set by the radar: () -> (lat, lon, radius_nm) of what is on screen
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -1278,11 +1552,19 @@ class Feed:
             if self.resting.get(name, 0) > now:
                 problems.append(f"{name} rate-limited")
                 continue
+            st = self.stats.setdefault(name, {"ok": 0, "error": "", "error_at": 0, "today": 0, "day": ""})
+            day = time.strftime("%Y-%m-%d")
+            if st["day"] != day:
+                st["day"], st["today"] = day, 0
+            st["today"] += 1
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "sky-radar/0.1"})
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    return name, json.load(resp)
+                    data = json.load(resp)
+                st["ok"], st["error"] = time.time(), ""
+                return name, data
             except urllib.error.HTTPError as e:
+                st["error"], st["error_at"] = ("rate-limited" if e.code == 429 else f"HTTP {e.code}"), time.time()
                 if e.code == 429:
                     wait = e.headers.get("Retry-After") or e.headers.get("x-ratelimit-reset") or "600"
                     wait = int(wait) if str(wait).isdigit() else 600
@@ -1291,6 +1573,7 @@ class Feed:
                 else:
                     problems.append(f"{name} HTTP {e.code}")
             except Exception as e:
+                st["error"], st["error_at"] = type(e).__name__, time.time()
                 problems.append(f"{name} {type(e).__name__}")
         raise RuntimeError(", ".join(problems))
 
@@ -1299,6 +1582,7 @@ class Feed:
             try:
                 source, data = self._fetch()
                 planes = data.get("ac") or data.get("aircraft") or []
+                self.source, self.count = source, len(planes)
                 positioned, mil_no_pos = {}, []
                 for p in planes:
                     hx = p.get("hex", "").lower()
@@ -1857,6 +2141,7 @@ class Weather:
         self.location = location
         self.cloud = None          # percent
         self.visibility_km = None
+        self.contrails = ""        # e.g. "long trails likely"
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -1870,9 +2155,31 @@ class Weather:
                 self.cloud = cur.get("cloud_cover")
                 vis = cur.get("visibility")
                 self.visibility_km = vis / 1000 if isinstance(vis, (int, float)) else None
+                self.contrails = self._contrails(lat, lon)
             except Exception:
                 pass                       # keep the last value; try again later
             time.sleep(15 * 60)
+
+    @staticmethod
+    def _contrails(lat, lon):
+        """Contrail outlook at cruising height (250/300 hPa, about 34,000 / 30,000 ft): trails form when it's
+        colder than about -40 C, and last long when the air is saturated with respect to ice."""
+        url = (f"{WEATHER_URL}?latitude={lat:.2f}&longitude={lon:.2f}&forecast_days=1&timezone=auto&hourly="
+               "temperature_250hPa,relative_humidity_250hPa,temperature_300hPa,relative_humidity_300hPa")
+        req = urllib.request.Request(url, headers={"User-Agent": "sky-radar/0.1"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            h = json.load(resp)["hourly"]
+        i = min(time.localtime().tm_hour, len(h["time"]) - 1)
+        best = "none"
+        for level in ("250", "300"):
+            t, rhw = h[f"temperature_{level}hPa"][i], h[f"relative_humidity_{level}hPa"][i]
+            if t is None or rhw is None or t > -40:
+                continue
+            e_water = 6.112 * math.exp(17.62 * t / (243.12 + t))
+            e_ice = 6.112 * math.exp(22.46 * t / (272.62 + t))
+            rh_ice = rhw * e_water / e_ice
+            best = "long" if rh_ice >= 100 else ("short" if best == "none" else best)
+        return {"long": "long trails likely", "short": "short trails only", "none": "no trails expected"}[best]
 
     def label(self):
         return f"clouds {round(self.cloud)}%" if isinstance(self.cloud, (int, float)) else ""
@@ -2001,6 +2308,9 @@ class Radar:
         self.selected = None
         self.canvas = pygame.Surface((CANVAS, CANVAS))
         self.fonts = {s: pygame.font.Font(None, s) for s in (20, 22, 24, 28, 34, 44)}
+        self.text_scale = 1.0
+        self.feed = None
+        self._last_empty_tap = (0.0, 0.0, 0.0)
         self._text_cache = {}
         self.btn_minus = (95, C)
         self.btn_plus = (CANVAS - 95, C)
@@ -2016,6 +2326,7 @@ class Radar:
         self.info = AircraftInfo()
         self.weather = Weather(location)
         self.health = PiHealth()
+        self.airports = Airports()
         self.updater = AutoUpdater(self)
         self.auto = None                       # auto-zoom state while an alert is on
         self.wake_until = 0.0                 # night mode: a touch wakes the screen for a minute
@@ -2185,13 +2496,21 @@ class Radar:
         self._press = None
         self.dragging = False
 
+    def font(self, size):
+        """Font for a design size, scaled up when Settings -> Text size is Large (radar view only)."""
+        actual = int(round(size * self.text_scale))
+        f = self.fonts.get(actual)
+        if f is None:
+            f = self.fonts[actual] = pygame.font.Font(None, actual)
+        return f
+
     def text(self, s, size, color):
-        key = (s, size, color)
+        key = (s, int(round(size * self.text_scale)), color)
         surf = self._text_cache.get(key)
         if surf is None:
             if len(self._text_cache) > 600:
                 self._text_cache.clear()
-            surf = self._text_cache[key] = self.fonts[size].render(s, True, color)
+            surf = self._text_cache[key] = self.font(size).render(s, True, color)
         return surf
 
     def blit_text(self, s, size, color, pos, anchor="center", bg=None):
@@ -2231,6 +2550,16 @@ class Radar:
             d = math.hypot(x - px, y - py)
             if d < best_d:
                 best, best_d = hx, d
+        if best is None:                       # empty map: a quick second tap zooms in on that spot
+            t0, x0, y0 = self._last_empty_tap
+            now = time.time()
+            if now - t0 < 0.4 and math.hypot(x - x0, y - y0) < 60:
+                geo = self.from_canvas(x, y)
+                self.zoom(-1)
+                self._place(geo, (x, y))
+                self._last_empty_tap = (0.0, 0.0, 0.0)
+                return
+            self._last_empty_tap = (now, x, y)
         if best != self.selected:
             self.card_collapsed = False
         self.selected = best
@@ -2238,10 +2567,13 @@ class Radar:
     # -- drawing ------------------------------------------------------------
     def draw(self, feed, now):
         cv = self.canvas
+        self.feed = feed                       # for the airport board and feed status screens
         self.settings.update(now)
         if self.settings.active:
+            self.text_scale = 1.0              # settings screens keep their normal size
             self.settings.draw(now)
             return cv
+        self.text_scale = 1.25 if self.settings.text_large else 1.0
         aircraft, mil_no_pos, trails, status, last_ok = feed.snapshot()
         self.home_lat, self.home_lon = self.location.current()
         self._sync_feed(feed, now)
@@ -2306,6 +2638,8 @@ class Radar:
         hud_bg = (2, 20, 17)
         place = self.location.name
         clouds = self.weather.label()
+        if self.weather.contrails:
+            self.blit_text(f"Contrails: {self.weather.contrails}", 24, TEXT_DIM, (C, 136), bg=hud_bg)
         self.blit_text(f"{place}  {fmt_clock()}" + (f"  |  {clouds}" if clouds else ""), 34, TEXT, (C, 100), bg=hud_bg)
         summary = f"{len(in_range)} aircraft  |  {mil_count} military  |  {fmt_dist(self.range_km)}"
         self.blit_text(summary, 34, TEXT, (C, 930), bg=hud_bg)
@@ -2324,7 +2658,9 @@ class Radar:
         self._draw_buttons()
         self.card_rect = None
         if self.selected:
+            scale, self.text_scale = self.text_scale, 1.0      # the details card has a fixed layout
             self._draw_info(aircraft[self.selected], now)
+            self.text_scale = scale
 
         if self.asleep(now):                  # night mode
             if self.settings.night_mode == "dim":
@@ -2370,9 +2706,24 @@ class Radar:
         t = math.radians(p.get("track", p.get("true_heading", 0)) or 0)
         ct, st = math.cos(t), math.sin(t)
         on_ground = p.get("alt_baro") == "ground"
-        scale = 0.6 if on_ground else (1.4 if mil else 1.0)
-        pts = [(x + (px * ct - py * st) * scale, y + (px * st + py * ct) * scale) for px, py in PLANE_SHAPE]
-        pygame.draw.polygon(self.canvas, col, pts)
+        kind = aircraft_kind(p)
+        scale = 0.6 if on_ground else (1.35 if mil else 1.0)
+        if kind == "jet" and (p.get("category") or "").upper() == "A5":
+            scale *= 1.2                                     # wide-body twins a bit bigger
+        shape = {"fighter": FIGHTER_SHAPE, "four": HEAVY_SHAPE, "light": LIGHT_SHAPE, "heli": HELI_SHAPE}.get(kind, PLANE_SHAPE)
+
+        def turn(px, py):
+            return x + (px * ct - py * st) * scale, y + (px * st + py * ct) * scale
+        pygame.draw.polygon(self.canvas, col, [turn(px, py) for px, py in shape])
+        if kind == "four":
+            for ex, ey in HEAVY_ENGINES:
+                pygame.draw.circle(self.canvas, col, turn(ex, ey + 3), max(2, int(2.5 * scale)))
+        elif kind == "heli":
+            spin = time.time() * 9                           # turning rotor
+            for k in range(2):
+                a = spin + k * math.pi / 2
+                pygame.draw.line(self.canvas, col, turn(13 * math.cos(a), 13 * math.sin(a) - 1),
+                                 turn(-13 * math.cos(a), -13 * math.sin(a) - 1), 2)
         if on_ground and hx != self.selected:
             return            # parked/taxiing aircraft: icon only, no clutter
         if x > C + 250:   # near the right edge of the round screen: label on the left
@@ -2576,10 +2927,10 @@ class Radar:
             parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
         detail = "  |  ".join(x for x in parts if x)
         hint = "" if emergency else "  |  ".join(h for h in (self._sun_glare(p, alert["dist"]), self.weather.spotting_hint()) if h)
-        tsize = 44 if self.fonts[44].size(title)[0] <= 780 else 34
-        w = max(self.fonts[tsize].size(title)[0], self.fonts[28].size(detail)[0], self.fonts[24].size(hint)[0]) + 48
+        tsize = 44 if self.font(44).size(title)[0] <= 780 else 34
+        w = min(1000, max(self.font(tsize).size(title)[0], self.font(28).size(detail)[0], self.font(24).size(hint)[0]) + 48)
         rect = pygame.Rect(0, 0, w, 128 if hint else 100)
-        rect.midtop = (C, 150)
+        rect.midtop = (C, 156)
         pygame.draw.rect(cv, (12, 6, 6) if red else (14, 12, 4), rect, border_radius=16)
         pygame.draw.rect(cv, col, rect, 4 if not soon else 2, border_radius=16)
         self.blit_text(title, tsize, col, (C, rect.y + 32))
@@ -2745,7 +3096,7 @@ class Radar:
         if self.card_collapsed:
             parts = [callsign(p), info["model"] or "", alt, speed]
             label = "  |  ".join(x for x in parts if x)
-            top_y = self.alert_rect.bottom + 30 if self.alert_rect else 160      # stay clear of an alert banner
+            top_y = self.alert_rect.bottom + 30 if self.alert_rect else 180      # stay clear of an alert banner
             rect = self.text(label, 24, col).get_rect(center=(C, top_y if at_top else 845)).inflate(28, 18)
             self.card_rect = rect
             pygame.draw.rect(cv, (2, 20, 17), rect, border_radius=12)
@@ -2756,7 +3107,7 @@ class Radar:
         loading = info["state"] == "loading"
         rect = pygame.Rect(0, 0, 480, 140 if mil else 196)
         if at_top:
-            rect.midtop = (C, self.alert_rect.bottom + 12 if self.alert_rect else 135)   # below an alert banner
+            rect.midtop = (C, self.alert_rect.bottom + 12 if self.alert_rect else 158)   # below an alert banner
         else:
             rect.midbottom = (C, 878)
         self.card_rect = rect
