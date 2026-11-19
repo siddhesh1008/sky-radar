@@ -17,6 +17,7 @@
   "military_alert_km": 5,
   "civil_alert_km": 5,
   "warning_lead_seconds": 180,
+  "auto_zoom": true,
   "home_elevation_m": null,
   "sightings_km": 10,
   "night_start": "22:00",

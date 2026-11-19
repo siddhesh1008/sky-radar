@@ -863,9 +863,14 @@ class SightingsScreen:
         self.settings = settings
         self.rects = []
         self.page = 0
+        self.mode = "list"
 
     def reset(self):
         self.page = 0
+        self.mode = "list"
+
+    def _set_mode(self, mode):
+        self.mode = mode
 
     def update(self, now):
         pass
@@ -886,9 +891,67 @@ class SightingsScreen:
         pages = max(1, (total + self.PAGE - 1) // self.PAGE)
         self.page = (self.page + 1) % pages
 
+    def _buttons(self, ui, buttons, y=745):
+        width = 200 if len(buttons) < 4 else 170
+        x = C - (len(buttons) * width + (len(buttons) - 1) * 12) // 2
+        for label, action in buttons:
+            rect = pygame.Rect(x, y, width, 66)
+            draw_button(ui, rect, label, primary=(label.startswith("Back")))
+            self.rects.append((rect, action))
+            x += width + 12
+
+    def _draw_times(self, ui, log):
+        grid = log.best_times()
+        draw_screen_bg(ui, "Best time to watch", "When military jets passed near you (last 90 days)")
+        total = sum(map(sum, grid))
+        if not total:
+            ui.blit_text("Not enough sightings yet.", 28, TEXT_DIM, (C, 450))
+        else:
+            day, slot = max(((d, h) for d in range(7) for h in range(12)), key=lambda dh: grid[dh[0]][dh[1]])
+            days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            busiest_day = max(range(7), key=lambda d: sum(grid[d]))
+            busiest_slot = max(range(12), key=lambda h: sum(grid[d][h] for d in range(7)))
+            ui.blit_text(f"Most often: {days[day]}, {slot * 2:02d}:00-{slot * 2 + 2:02d}:00", 34, SELECT, (C, 230))
+            ui.blit_text(f"Busiest day {days[busiest_day]}  |  busiest time {busiest_slot * 2:02d}:00-{busiest_slot * 2 + 2:02d}:00",
+                         24, TEXT_DIM, (C, 270))
+            peak = max(max(row) for row in grid)
+            cw, ch, x0, y0 = 50, 44, C - 300 + 30, 310
+            for d in range(7):
+                ui.blit_text(days[d], 24, TEXT_DIM, (x0 - 12, y0 + d * ch + ch // 2), "midright")
+                for h in range(12):
+                    v = grid[d][h] / peak if peak else 0
+                    col = tuple(int(SCOPE_BG[i] + (MIL[i] - SCOPE_BG[i]) * v) for i in range(3))
+                    cell = pygame.Rect(x0 + h * cw, y0 + d * ch, cw - 4, ch - 4)
+                    pygame.draw.rect(ui.canvas, col, cell, border_radius=6)
+                    if grid[d][h]:
+                        ui.blit_text(str(grid[d][h]), 22, (240, 245, 245), cell.center)
+            for h in range(0, 12, 2):
+                ui.blit_text(f"{h * 2:02d}", 22, TEXT_DIM, (x0 + h * cw + (cw - 4) // 2, y0 + 7 * ch + 14))
+        self._buttons(ui, [("Back to list", lambda: self._set_mode("list"))], y=680)
+
+    def _draw_records(self, ui, log):
+        draw_screen_bg(ui, "Records", "Military sightings near you (last 90 days)")
+        recs = log.records()
+        if not recs:
+            ui.blit_text("No sightings yet.", 28, TEXT_DIM, (C, 450))
+        y = 250
+        for label, text in recs:
+            rect = pygame.Rect(0, 0, 760, 74)
+            rect.midtop = (C, y)
+            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
+            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=12)
+            ui.blit_text(label, 24, TEXT_DIM, (rect.x + 20, rect.y + 10), "topleft")
+            ui.blit_text(text[:56], 28, MIL, (rect.x + 20, rect.y + 38), "topleft")
+            y += 82
+        self._buttons(ui, [("Back to list", lambda: self._set_mode("list"))], y=y + 20)
+
     def draw(self, ui, now):
         self.rects = []
         log = ui.sightings
+        if self.mode == "times":
+            return self._draw_times(ui, log)
+        if self.mode == "records":
+            return self._draw_records(ui, log)
         entries = sorted(log.entries, key=lambda e: e.get("last", 0), reverse=True)
         draw_screen_bg(ui, "Military sightings",
                        f"Today {log.today()}  |  This week {log.count_since(7 * 86400)}  |  90 days {len(entries)}")
@@ -901,20 +964,17 @@ class SightingsScreen:
             rect.midtop = (C, y)
             pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
             pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=12)
-            when = time.strftime("%a %d %b  %H:%M", time.localtime(e.get("first", 0)))
+            when = time.strftime("%a %d %b  ", time.localtime(e.get("first", 0))) + fmt_clock(e.get("first", 0))
             ui.blit_text(f"{e.get('callsign', '?')}  -  {e.get('model', '?')}"[:40], 28, MIL, (rect.x + 20, rect.y + 10), "topleft")
-            ui.blit_text(f"{when}   closest {fmt_dist(e.get('closest_km', 0))} {e.get('dir', '')}   {e.get('alt', '')}"[:62],
+            alt = fmt_alt_ft(e["min_alt_ft"]) if isinstance(e.get("min_alt_ft"), int) else e.get("alt", "")
+            ui.blit_text(f"{when}   closest {fmt_dist(e.get('closest_km', 0))} {e.get('dir', '')}   {alt}"[:62],
                          24, TEXT_DIM, (rect.x + 20, rect.y + 44), "topleft")
             y += 82
-        buttons = [("Back", self.settings.done)]
+        buttons = [("Back", self.settings.done), ("Best times", lambda: self._set_mode("times")),
+                   ("Records", lambda: self._set_mode("records"))]
         if len(entries) > self.PAGE:
             buttons.append(("More", lambda: self._more(len(entries))))
-        x = C - (len(buttons) * 200 + (len(buttons) - 1) * 12) // 2
-        for label, action in buttons:
-            rect = pygame.Rect(x, 745, 200, 66)
-            draw_button(ui, rect, label, primary=(label == "Back"))
-            self.rects.append((rect, action))
-            x += 212
+        self._buttons(ui, buttons)
 
 
 # --------------------------------------------------------------------------- settings menu
@@ -929,6 +989,10 @@ class Settings:
         self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self),
                         "sightings": SightingsScreen(self)}
         self.night_mode = load_prefs().get("night_mode", "off")      # "off", "dim" or "blank"
+        self.menu_page = 0
+        u = load_prefs().get("units")
+        if isinstance(u, list) and tuple(u) in UNIT_PRESETS:
+            set_units(*u)
         saved = load_prefs().get("alert_directions", DIRECTIONS)
         self.alert_dirs = {d for d in saved if d in DIRECTIONS} if isinstance(saved, list) else set(DIRECTIONS)
         self.screen = None            # None = radar, "menu", "location" or "wifi"
@@ -948,6 +1012,7 @@ class Settings:
 
     # -- navigation ---------------------------------------------------------------
     def open_menu(self):
+        self.menu_page = 0
         self.rotation = get_rotation()
         self.from_menu = True
         self.flow = []
@@ -1014,6 +1079,15 @@ class Settings:
         pygame.draw.polygon(ui.canvas, SWEEP, [tip, (px - dx * 3 + nx * 7, py - dy * 3 + ny * 7),
                                                (px - dx * 3 - nx * 7, py - dy * 3 - ny * 7)])
         return rect
+
+    def _cycle_units(self):
+        cur = (UNITS["dist"], UNITS["alt"], UNITS["clock"])
+        nxt = UNIT_PRESETS[(UNIT_PRESETS.index(cur) + 1) % len(UNIT_PRESETS)] if cur in UNIT_PRESETS else UNIT_PRESETS[0]
+        set_units(*nxt)
+        save_prefs(units=list(nxt))
+
+    def _page(self, n):
+        self.menu_page = n
 
     def _cycle_night(self):
         order = ["off", "dim", "blank"]
@@ -1108,39 +1182,57 @@ class Settings:
             touch_value = "Not needed on this computer"
         else:
             touch_value = "On" if touch else "Off - touch works like a mouse"
-        rows = [("Location", self.location.name, lambda: self.show("location")),
-                ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
-                ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
-                ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
-                 lambda: self.show("sightings")),
-                ("Night mode", self.night_label(), self._cycle_night),
-                ("Pinch to zoom", touch_value, self._toggle_pinch),
-                ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None)]
-        y = 178
+        health, updater = self.ui.health, self.ui.updater
+        if self.menu_page == 0:
+            rows = [("Location", self.location.name, lambda: self.show("location")),
+                    ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
+                    ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
+                    ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
+                     lambda: self.show("sightings")),
+                    ("Night mode", self.night_label(), self._cycle_night)]
+        else:
+            rows = [("Pinch to zoom", touch_value, self._toggle_pinch),
+                    ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None),
+                    ("Units", units_label(), self._cycle_units),
+                    ("Pi health", health.label(), None),
+                    ("Auto updates", updater.label(), updater.toggle if updater.available else None)]
+        draw_screen_bg(ui, "Settings" if self.menu_page == 0 else "Settings - display and system")
+        y = 200
         for title, value, action in rows:
-            rect = pygame.Rect(0, 0, 700, 74)
+            rect = pygame.Rect(0, 0, 700, 92)
             rect.midtop = (C, y)
-            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=12)
-            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=12)
-            ui.blit_text(title, 28, TEXT, (rect.x + 26, rect.y + 10), "topleft")
-            ui.blit_text(value[:48], 24, TEXT_DIM, (rect.x + 26, rect.y + 44), "topleft")
+            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=14)
+            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
+            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 18), "topleft")
+            warn = title == "Pi health" and health.hot()
+            ui.blit_text(value[:48], 28, WARN if warn else TEXT_DIM, (rect.x + 28, rect.y + 56), "topleft")
+            y += 104
             if title == "Screen rotation":
                 ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
                 cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
                 self.rects.append((ccw, lambda: self._rotate(-90)))
                 self.rects.append((cw, lambda: self._rotate(90)))
-                y += 82
                 continue
-            if title == "Pinch to zoom" and touch is not None:
-                self._draw_switch(ui, rect.right - 70, rect.centery, touch)
-            elif title != "Pinch to zoom":
+            if title == "Pinch to zoom":
+                if touch is not None:
+                    self._draw_switch(ui, rect.right - 70, rect.centery, touch)
+            elif title == "Auto updates":
+                if updater.available:
+                    self._draw_switch(ui, rect.right - 70, rect.centery, updater.enabled)
+            elif action is not None:
                 ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
+            if action is not None:
+                self.rects.append((rect, action))
+        if self.menu_page == 0:
+            buttons = [("Close", self.close, True), ("More >", lambda: self._page(1), False)]
+        else:
+            buttons = [("< Back", lambda: self._page(0), False), ("Close", self.close, True)]
+        x = C - (2 * 220 + 16) // 2
+        for label, action, primary in buttons:
+            rect = pygame.Rect(x, 735, 220, 66)
+            draw_button(ui, rect, label, primary=primary)
             self.rects.append((rect, action))
-            y += 82
-        close = pygame.Rect(0, 0, 260, 64)
-        close.midtop = (C, 765)
-        draw_button(ui, close, "Close", primary=True)
-        self.rects.append((close, self.close))
+            x += 236
 
 
 # --------------------------------------------------------------------------- data feed
@@ -1364,11 +1456,41 @@ class MapLayer:
         return final, missing
 
 
+UNITS = {"dist": "km", "alt": "ft", "clock": "24h"}
+UNIT_PRESETS = [("km", "ft", "24h"), ("km", "m", "24h"), ("mi", "ft", "12h"), ("mi", "ft", "24h")]
+
+
+def set_units(dist, alt, clock):
+    UNITS.update(dist=dist, alt=alt, clock=clock)
+
+
+def units_label():
+    return f"{UNITS['dist']}, {UNITS['alt']}, {UNITS['clock'].replace('h', ' h')} clock"
+
+
 def fmt_dist(km):
-    """1.5 -> '1.5 km', 0.05 -> '50 m'."""
+    """Distance in the chosen units: '1.5 km' / '50 m', or '2.3 mi' / '800 ft'."""
+    if UNITS["dist"] == "mi":
+        miles = km * 0.621371
+        if miles < 0.5:
+            return f"{int(round(km * 3280.84 / 10) * 10):,} ft"
+        return f"{round(miles, 1 if miles < 10 else 0):g} mi"
     if km < 1:
-        return f"{km * 1000:g} m"
+        return f"{round(km * 1000):g} m"
     return f"{km:g} km"
+
+
+def fmt_alt_ft(ft):
+    if UNITS["alt"] == "m":
+        return f"{int(round(ft * 0.3048)):,} m"
+    return f"{int(ft):,} ft"
+
+
+def fmt_clock(ts=None):
+    lt = time.localtime(ts if ts is not None else time.time())
+    if UNITS["clock"] == "12h":
+        return time.strftime("%I:%M %p", lt).lstrip("0")
+    return time.strftime("%H:%M", lt)
 
 
 def is_military(p):
@@ -1384,8 +1506,8 @@ def fmt_alt(p):
     if alt == "ground":
         return "ground"
     if isinstance(alt, (int, float)):
-        return f"{int(alt):,} ft"
-    return "? ft"
+        return fmt_alt_ft(alt)
+    return "?"
 
 
 # --------------------------------------------------------------------------- aircraft details
@@ -1589,6 +1711,144 @@ class AircraftInfo:
                     self.cache[(hx, cs)].update(out, state=state, time=time.time())
 
 
+# --------------------------------------------------------------------------- sun
+def sun_position(lat, lon, ts):
+    """(azimuth, elevation) of the sun in degrees for a place and time (accurate to well under a degree)."""
+    d = ts / 86400.0 + 2440587.5 - 2451545.0                 # days since 1 Jan 2000, 12:00 UTC
+    g = math.radians((357.529 + 0.98560028 * d) % 360)
+    q = (280.459 + 0.98564736 * d) % 360
+    lam = math.radians((q + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g)) % 360)
+    eps = math.radians(23.439 - 0.00000036 * d)
+    ra = math.atan2(math.cos(eps) * math.sin(lam), math.cos(lam))
+    dec = math.asin(math.sin(eps) * math.sin(lam))
+    gmst = (18.697374558 + 24.06570982441908 * d) % 24
+    ha = math.radians((gmst * 15 + lon) % 360) - ra
+    phi = math.radians(lat)
+    el = math.asin(math.sin(phi) * math.sin(dec) + math.cos(phi) * math.cos(dec) * math.cos(ha))
+    az = math.atan2(-math.sin(ha), math.tan(dec) * math.cos(phi) - math.sin(phi) * math.cos(ha))
+    return math.degrees(az) % 360, math.degrees(el)
+
+
+def angle_between(az1, el1, az2, el2):
+    """Angle in degrees between two directions in the sky."""
+    a1, e1, a2, e2 = map(math.radians, (az1, el1, az2, el2))
+    c = math.sin(e1) * math.sin(e2) + math.cos(e1) * math.cos(e2) * math.cos(a1 - a2)
+    return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+# --------------------------------------------------------------------------- Pi health
+class PiHealth:
+    """Raspberry Pi temperature, cooler fan speed and throttling, read every 10 seconds."""
+    TEMP_FILE = "/sys/class/thermal/thermal_zone0/temp"
+    HOT_C = 75
+
+    def __init__(self):
+        self.available = os.path.exists(self.TEMP_FILE)
+        self.temp = self.fan_rpm = None
+        self.throttled = 0
+        if self.available:
+            threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        import glob
+        while True:
+            try:
+                with open(self.TEMP_FILE) as f:
+                    self.temp = int(f.read().strip()) / 1000
+            except (OSError, ValueError):
+                pass
+            for path in glob.glob("/sys/class/hwmon/hwmon*/fan1_input"):
+                try:
+                    with open(path) as f:
+                        self.fan_rpm = int(f.read().strip())
+                    break
+                except (OSError, ValueError):
+                    pass
+            try:
+                out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=5).stdout
+                self.throttled = int(out.strip().split("=")[1], 16)
+            except Exception:
+                pass
+            time.sleep(10)
+
+    def hot(self):
+        """True when the Pi is too warm or is slowing itself down right now."""
+        return (self.temp is not None and self.temp >= self.HOT_C) or bool(self.throttled & 0b110)
+
+    def label(self):
+        if not self.available:
+            return "Only on the Raspberry Pi"
+        if self.temp is None:
+            return "Reading..."
+        parts = [f"CPU {self.temp:.0f}\u00b0C"]
+        if self.fan_rpm is not None:
+            parts.append(f"fan {self.fan_rpm} rpm" if self.fan_rpm else "fan off")
+        if self.throttled & 0x1:
+            parts.append("LOW POWER - use a 27 W supply")
+        elif self.throttled & 0b110:
+            parts.append("SLOWED DOWN - too hot")
+        elif self.temp >= self.HOT_C:
+            parts.append("HOT")
+        else:
+            parts.append("OK")
+        return ", ".join(parts)
+
+
+# --------------------------------------------------------------------------- automatic updates
+class AutoUpdater:
+    """Optional nightly update from GitHub (Raspberry Pi only). Runs run.py --update at 03:00 when there is
+    something new, never while an alert is on screen."""
+    HOUR = 3
+
+    def __init__(self, radar):
+        self.radar = radar
+        self.available = sys.platform.startswith("linux") and os.path.isdir(os.path.join(HERE, ".git")) \
+            and shutil.which("git") is not None
+        prefs = load_prefs()
+        self.enabled = bool(prefs.get("auto_update", False))
+        self.last = prefs.get("auto_update_last", "")
+        if self.available:
+            threading.Thread(target=self._run, daemon=True).start()
+
+    def toggle(self):
+        self.enabled = not self.enabled
+        save_prefs(auto_update=self.enabled)
+
+    def label(self):
+        if not self.available:
+            return "Only on the Raspberry Pi"
+        if not self.enabled:
+            return "Off"
+        return f"On, nightly at {self.HOUR:02d}:00" + (f" - {self.last}" if self.last else "")
+
+    def _note(self, text):
+        self.last = text
+        save_prefs(auto_update_last=text)
+
+    def _run(self):
+        done_day = None
+        while True:
+            time.sleep(60)
+            lt = time.localtime()
+            today = time.strftime("%Y-%m-%d", lt)
+            if not self.enabled or lt.tm_hour != self.HOUR or done_day == today or self.radar.alert_hex:
+                continue
+            done_day = today
+            try:
+                subprocess.run(["git", "-C", HERE, "fetch", "-q"], timeout=120, check=True)
+                local = subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+                remote = subprocess.run(["git", "-C", HERE, "rev-parse", "@{u}"], capture_output=True, text=True).stdout.strip()
+                if local == remote:
+                    self._note(f"up to date ({time.strftime('%d %b', lt)})")
+                    continue
+                self._note(f"updated {time.strftime('%d %b', lt)}")
+                subprocess.Popen([sys.executable, os.path.join(HERE, "run.py"), "--update"], cwd=HERE,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)       # restarts Sky Radar with the new version
+            except Exception as e:
+                self._note(f"check failed ({type(e).__name__})")
+
+
 # --------------------------------------------------------------------------- weather
 class Weather:
     """Cloud cover at home from Open-Meteo, refreshed every 15 minutes (position rounded to ~1 km)."""
@@ -1659,6 +1919,9 @@ class Sightings:
             e["closest_km"] = round(p["_dist_km"], 2)
             e["dir"] = direction
             e["alt"] = fmt_alt(p)
+        alt = p.get("alt_baro")
+        if isinstance(alt, (int, float)) and alt < e.get("min_alt_ft", 10 ** 6):
+            e["min_alt_ft"] = int(alt)
         self.dirty = True
 
     def maybe_save(self, now):
@@ -1677,6 +1940,40 @@ class Sightings:
     def today(self):
         day = time.strftime("%Y-%m-%d")
         return sum(1 for e in self.entries if e["day"] == day)
+
+    def best_times(self):
+        """grid[weekday 0=Mon][2-hour slot 0..11] = number of sightings."""
+        grid = [[0] * 12 for _ in range(7)]
+        for e in self.entries:
+            lt = time.localtime(e.get("first", 0))
+            grid[lt.tm_wday][lt.tm_hour // 2] += 1
+        return grid
+
+    def records(self):
+        """[(label, text)] for the Records page."""
+        if not self.entries:
+            return []
+        out = []
+        c = min(self.entries, key=lambda e: e.get("closest_km", 99))
+        out.append(("Closest pass", f"{c.get('callsign')} {c.get('model')}, {fmt_dist(c.get('closest_km', 0))} {c.get('dir', '')}, "
+                                    + time.strftime("%d %b", time.localtime(c.get("first", 0)))))
+        with_alt = [e for e in self.entries if isinstance(e.get("min_alt_ft"), int)]
+        if with_alt:
+            lo = min(with_alt, key=lambda e: e["min_alt_ft"])
+            out.append(("Lowest", f"{lo.get('callsign')} {lo.get('model')}, {fmt_alt_ft(lo['min_alt_ft'])}, "
+                                  + time.strftime("%d %b", time.localtime(lo.get("first", 0)))))
+        types = {}
+        for e in self.entries:
+            types[e.get("model", "?")] = types.get(e.get("model", "?"), 0) + 1
+        top = max(types.items(), key=lambda kv: kv[1])
+        out.append(("Most seen", f"{top[0]} ({top[1]}x)"))
+        days = {}
+        for e in self.entries:
+            days[e["day"]] = days.get(e["day"], 0) + 1
+        busiest = max(days.items(), key=lambda kv: kv[1])
+        out.append(("Busiest day", time.strftime("%a %d %b", time.strptime(busiest[0], "%Y-%m-%d")) + f" ({busiest[1]} jets)"))
+        out.append(("Total", f"{len(self.entries)} sightings in {len(days)} days with jets (last 90 days)"))
+        return out
 
 
 # --------------------------------------------------------------------------- radar view
@@ -1718,6 +2015,9 @@ class Radar:
         self.settings = Settings(self, location, cfg)
         self.info = AircraftInfo()
         self.weather = Weather(location)
+        self.health = PiHealth()
+        self.updater = AutoUpdater(self)
+        self.auto = None                       # auto-zoom state while an alert is on
         self.wake_until = 0.0                 # night mode: a touch wakes the screen for a minute
         self._swallow = False
         self._mil_alert = False
@@ -1743,7 +2043,12 @@ class Radar:
     def range_km(self):
         return self.live_range or self.ranges[self.range_idx]
 
+    def _user_took_over(self):
+        if self.auto:
+            self.auto["user"] = True
+
     def zoom(self, step):
+        self._user_took_over()
         self.range_idx = max(0, min(len(self.ranges) - 1, self.range_idx + step))
 
     # -- view / projection ------------------------------------------------------
@@ -1808,6 +2113,7 @@ class Radar:
             self.wake_until = now + 60        # first touch only wakes the screen
             self._swallow, self._press = True, None
             return
+        self._user_took_over()
         self._press = self._last_drag = (x, y)
         self.dragging = False
 
@@ -1840,6 +2146,7 @@ class Radar:
         return max(20.0, math.hypot(x2 - x1, y2 - y1)), ((x1 + x2) / 2, (y1 + y2) / 2)
 
     def finger_down(self, fid, x, y):
+        self._user_took_over()
         self.fingers[fid] = (x, y)
         if len(self.fingers) == 2 and self.pinch is None:
             dist, mid = self._two_fingers()
@@ -1984,12 +2291,14 @@ class Radar:
             self._draw_plane(hx, aircraft[hx])
 
         self._draw_home()
+        self._draw_sun(now)
         cv.blit(self._outside, (0, 0))    # trim map, paths and labels to the round screen
 
         self.sightings.maybe_save(now)
         self.alert_rect, self.alert_hex = None, None
         alert = self._find_alert(aircraft)
         self._mil_alert = bool(alert and alert[0] == 2)
+        self._auto_zoom(alert, now)
         if alert:
             self._draw_alert(*alert, now)
 
@@ -1997,11 +2306,14 @@ class Radar:
         hud_bg = (2, 20, 17)
         place = self.location.name
         clouds = self.weather.label()
-        self.blit_text(f"{place}  {time.strftime('%H:%M')}" + (f"  |  {clouds}" if clouds else ""), 34, TEXT, (C, 100), bg=hud_bg)
+        self.blit_text(f"{place}  {fmt_clock()}" + (f"  |  {clouds}" if clouds else ""), 34, TEXT, (C, 100), bg=hud_bg)
         summary = f"{len(in_range)} aircraft  |  {mil_count} military  |  {fmt_dist(self.range_km)}"
         self.blit_text(summary, 34, TEXT, (C, 930), bg=hud_bg)
         if mil_no_pos:
             self.blit_text(f"+{len(mil_no_pos)} military heard, no position", 28, MIL, (C, 893), bg=hud_bg)
+        if self.health.hot():
+            self.blit_text(f"Pi is hot ({self.health.temp:.0f}\u00b0C) - check the cooler" if self.health.temp else
+                           "Pi is slowing down - check power and cooling", 28, WARN, (C, 856), bg=hud_bg)
         stale = last_ok and now - last_ok > 30
         self.blit_text(status + ("  (stale)" if stale else ""), 24, WARN if (stale or "error" in status) else TEXT_DIM, (C, 966), bg=hud_bg)
         if base:
@@ -2020,7 +2332,7 @@ class Radar:
                 cv.blit(self._night_fill, (0, 0))
             else:
                 cv.fill(BLACK)
-                self.blit_text(time.strftime("%H:%M"), 34, (20, 60, 50), (C, C))
+                self.blit_text(fmt_clock(), 34, (20, 60, 50), (C, C))
         return cv
 
     def _draw_sweep(self, now):
@@ -2113,7 +2425,7 @@ class Radar:
                             pe, pn = e + ve * t, n + vn * t
                             if math.hypot(pe, pn) <= radius and compass_direction(pe, pn) in dirs:
                                 alert = {"kind": "soon", "dir": compass_direction(pe, pn), "eta": t,
-                                         "dist": math.hypot(pe, pn)}
+                                         "dist": math.hypot(pe, pn), "e": pe, "n": pn}
                                 break
             if alert is None:
                 continue
@@ -2150,13 +2462,81 @@ class Radar:
                 pass                                     # offline: angles use sea level until next start
         threading.Thread(target=work, daemon=True).start()
 
-    def _look_up(self, p, dist_km):
-        """Angle above the horizon to look at this plane, as text (e.g. "25\u00b0 UP")."""
+    def _alert_point(self, p):
+        """(lat, lon) where you'll see the alert plane: now, or where it enters your zone."""
+        al = p.get("_alert") or {}
+        if al.get("kind") == "soon" and "e" in al:
+            return (self.home_lat + al["n"] / KM_PER_DEG,
+                    self.home_lon + al["e"] / (KM_PER_DEG * math.cos(math.radians(self.home_lat))))
+        return p["lat"], p["lon"]
+
+    def _auto_zoom(self, alert, now):
+        """While a (non-emergency) alert is on, keep you and the plane on screen; afterwards go back."""
+        if not self.cfg.get("auto_zoom", True):
+            return
+        if alert and alert[0] in (1, 2):
+            _, hx, p = alert
+            if self.auto is None:
+                self.auto = {"saved": (self.view_lat, self.view_lon, self.range_idx), "user": False, "hex": None}
+            self.auto["seen"] = now
+            if self.auto["user"]:
+                return
+            pts = [(self.home_lat, self.home_lon), (p["lat"], p["lon"]), self._alert_point(p)]
+            visible = all(km_between((self.view_lat, self.view_lon), q) <= 0.85 * self.range_km for q in pts)
+            if self.auto["hex"] == hx and visible:
+                return
+            self.auto["hex"] = hx
+            lats, lons = [q[0] for q in pts], [q[1] for q in pts]
+            center = ((min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2)
+            need = max(km_between(center, q) for q in pts) * 1.35 + 0.3
+            self.range_idx = next((i for i, r in enumerate(self.ranges) if r >= need), len(self.ranges) - 1)
+            self.live_range = None
+            self.view_lat, self.view_lon = center
+            self._update_view()
+        elif self.auto and now - self.auto.get("seen", 0) > 8:
+            if not self.auto["user"]:
+                self.view_lat, self.view_lon, self.range_idx = self.auto["saved"]
+                self._update_view()
+            self.auto = None
+
+    def _draw_sun(self, now):
+        """Small sun on the radar ring, in the sun's compass direction (only while it is up)."""
+        az, el = sun_position(self.home_lat, self.home_lon, now)
+        self.sun = (az, el)
+        if el < -2:
+            return
+        r = R + 20                      # in the band outside the radar ring, clear of the text
+        x, y = C + r * math.sin(math.radians(az)), C - r * math.cos(math.radians(az))
+        col = (250, 200, 60)
+        for k in range(8):
+            a = math.radians(k * 45)
+            pygame.draw.line(self.canvas, col, (x + 9 * math.cos(a), y + 9 * math.sin(a)),
+                             (x + 14 * math.cos(a), y + 14 * math.sin(a)), 2)
+        pygame.draw.circle(self.canvas, col, (x, y), 7)
+
+    def _sun_glare(self, p, dist_km):
+        """Hint when the plane will be close to the sun as seen from home."""
+        sun = getattr(self, "sun", None)
+        angle = self._look_angle(p, dist_km)
+        if not sun or sun[1] <= 0 or angle is None:
+            return ""
+        lat, lon = self._alert_point(p)
+        e, n = self.home_offset_km(lat, lon)
+        plane_az = math.degrees(math.atan2(e, n)) % 360
+        return "Near the sun - shade your eyes" if angle_between(plane_az, angle, sun[0], sun[1]) < 20 else ""
+
+    def _look_angle(self, p, dist_km):
+        """Angle above the horizon in degrees, or None if the altitude is unknown."""
         alt = p.get("alt_geom") if isinstance(p.get("alt_geom"), (int, float)) else p.get("alt_baro")
         if not isinstance(alt, (int, float)):
+            return None
+        return math.degrees(math.atan2(alt * 0.3048 - self.home_elev_m, max(dist_km, 0.05) * 1000))
+
+    def _look_up(self, p, dist_km):
+        """Angle above the horizon to look at this plane, as text (e.g. "25\u00b0 UP")."""
+        angle = self._look_angle(p, dist_km)
+        if angle is None:
             return ""
-        height = alt * 0.3048 - self.home_elev_m
-        angle = math.degrees(math.atan2(height, max(dist_km, 0.05) * 1000))
         return "LOW ON THE HORIZON" if angle < 4 else f"{round(angle)}\u00b0 UP"
 
     def _draw_alert(self, level, hx, p, now):
@@ -2195,7 +2575,7 @@ class Radar:
             title = f"{'MILITARY ALERT' if red else 'AIRCRAFT NEARBY'} - LOOK {where}" + (f", {up}" if up else "")
             parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
         detail = "  |  ".join(x for x in parts if x)
-        hint = "" if emergency else self.weather.spotting_hint()
+        hint = "" if emergency else "  |  ".join(h for h in (self._sun_glare(p, alert["dist"]), self.weather.spotting_hint()) if h)
         tsize = 44 if self.fonts[44].size(title)[0] <= 780 else 34
         w = max(self.fonts[tsize].size(title)[0], self.fonts[28].size(detail)[0], self.fonts[24].size(hint)[0]) + 48
         rect = pygame.Rect(0, 0, w, 128 if hint else 100)
@@ -2337,7 +2717,7 @@ class Radar:
         dest = info.get("dest")
         if not is_military(p) and dest and dest.get("lat") is not None:
             hours = great_circle_km(p["lat"], p["lon"], dest["lat"], dest["lon"]) / speed_kmh
-            arrive = time.strftime("%H:%M", time.localtime(now + hours * 3600))
+            arrive = fmt_clock(now + hours * 3600)
             return (f"Arrives {dest['code']}", arrive, "in " + fmt_duration(hours))
         # no destination (military): when is it closest to you?
         dx, dy = self.home_offset_km(p["lat"], p["lon"])
