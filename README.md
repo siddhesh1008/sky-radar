@@ -20,6 +20,14 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 - **"Can I see it?" and "Will I hear it?":** every alert and details card rates how easy the plane is to spot from
   the ground, from its distance, height, size, the cloud cover and the time of day (Easy to see · Visible ·
   Hard to see · Lights only at night · Not visible), plus a rough loudness estimate (e.g. "very loud", "faint", "silent")
+- **Heading lines:** a short line from each plane shows where it will be in a minute, so you can see at a glance
+  which ones are coming your way (when zoomed in, it's shortened to just show the direction)
+- **Formations:** military jets flying together (close, same height, speed and heading for 20 s) are linked on the
+  map and named in the alert and card, e.g. "Formation of 4 Eurofighter Typhoons"
+- **Orbits:** military planes flying circles or racetracks, typically tankers and AWACS, are labelled "orbiting", and
+  the card says where, e.g. "Orbiting 40 km NW, 2 laps in 20 min". Often a sign that fighters are training nearby
+- **Rare visitors:** if a military type has never been in your sightings log before, the alert and card say
+  **"RARE: first time seen here"**
 - Tap a plane for a small details card. It appears on the half of the screen away from the plane, so the plane stays visible:
   - **Civil:** model (e.g. Airbus A320neo), airline, from → to, altitude, speed in knots, and arrival time at the destination
   - **Military:** model (e.g. Eurofighter Typhoon, F-35, Rafale), operator, altitude, speed,
@@ -99,6 +107,7 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
       and it's remembered after a reboot; on a PC the app turns its own window.
     - **Units:** tap to switch between km · ft · 24 h, km · m · 24 h, mi · ft · 12 h and mi · ft · 24 h
     - **Text size:** Normal or Large
+    - **Heading lines:** on/off
     - **Colour theme:** Green, Amber, Blue or Red
     - **Height filter:** All heights, below 10,000 ft or below 5,000 ft
   - **System**

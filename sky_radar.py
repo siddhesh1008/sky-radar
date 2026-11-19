@@ -1425,6 +1425,7 @@ class Settings:
         self.max_alt = int(prefs.get("max_alt_ft", 0) or 0)            # 0 = show all heights
         self.theme = prefs.get("theme", "green") if prefs.get("theme") in THEMES else "green"
         self.text_large = load_prefs().get("text_size") == "large"
+        self.heading_lines = prefs.get("heading_lines", True) is not False
         self.night_mode = load_prefs().get("night_mode", "off")      # "off", "dim" or "blank"
         self.menu_scroll = 0.0        # how far the settings list is scrolled (px)
         self.menu_vel = 0.0           # flick speed (px/s), slows down by itself
@@ -1544,6 +1545,10 @@ class Settings:
     def _start_replay(self):
         self.close()
         self.ui.start_replay()
+
+    def _toggle_heading(self):
+        self.heading_lines = not self.heading_lines
+        save_prefs(heading_lines=self.heading_lines)
 
     def _toggle_text(self):
         self.text_large = not self.text_large
@@ -1728,8 +1733,8 @@ class Settings:
                     self.rects.append((ccw.clip(view), lambda: self._rotate(-90)))
                     self.rects.append((cw.clip(view), lambda: self._rotate(90)))
                     continue
-                if title in ("Pinch to zoom", "Text size"):
-                    on = touch if title == "Pinch to zoom" else self.text_large
+                if title in ("Pinch to zoom", "Text size", "Heading lines"):
+                    on = {"Pinch to zoom": touch, "Text size": self.text_large}.get(title, self.heading_lines)
                     if on is not None:
                         self._draw_switch(ui, rect.right - 70, rect.centery, on)
                 elif title == "Auto updates":
@@ -1785,6 +1790,8 @@ class Settings:
                 ("Screen rotation", f"{self.rotation}° clockwise" if self.rotation else "Normal", None),
                 ("Units", units_label(), self._cycle_units),
                 ("Text size", "Large" if self.text_large else "Normal", self._toggle_text),
+                ("Heading lines", "Where each plane is heading (up to 1 min)" if self.heading_lines else "Off",
+                 self._toggle_heading),
                 ("Colour theme", THEME_NAMES[self.theme], self._cycle_theme),
                 ("Height filter", self.height_label(), self._cycle_height)]),
             ("System", [
@@ -2592,6 +2599,8 @@ class Sightings:
         e["last"] = now
         e["callsign"] = callsign(p)
         e["model"] = model or e.get("model") or p.get("t") or "Unknown type"
+        if p.get("t"):
+            e["t"] = p["t"]
         if p["_dist_km"] < e["closest_km"]:
             e["closest_km"] = round(p["_dist_km"], 2)
             e["dir"] = direction
@@ -2609,6 +2618,13 @@ class Sightings:
                 self.dirty, self.saved_at = False, now
             except OSError:
                 pass
+
+    def seen_before(self, p, model, now):
+        """Has this type been logged before (other aircraft, or this one on an earlier day)?"""
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        keys = {k for k in (model, p.get("t")) if k}
+        return any((e.get("model") in keys or e.get("t") in keys)
+                   and not (e.get("hex") == p.get("hex") and e.get("day") == day) for e in self.entries)
 
     def count_since(self, seconds):
         cutoff = time.time() - seconds
@@ -2698,6 +2714,12 @@ class Radar:
         self.health = PiHealth()
         self.airports = Airports()
         self.replay = None                     # {"t": time shown, "playing": bool, "last": frame time}
+        self.formations = {}                   # hex -> list of hexes flying together (military)
+        self._pairs = {}                       # (hex, hex) -> since when they fly together
+        self.orbits = {}                       # hex -> {"km", "dir", "laps"} for planes flying circles
+        self._orbit_at = 0.0
+        self._rare = {}                        # hex -> True when its type was never logged before
+        self._last_aircraft = {}
         self.replay_rects = []
         try:
             with open(os.path.join(HERE, "traffic.json"), encoding="utf-8") as f:
@@ -3100,6 +3122,9 @@ class Radar:
                 mil_count += 1
         if self.selected and self.selected not in aircraft:
             self.selected = None
+        self._last_aircraft = aircraft
+        self._find_formations(aircraft, now)
+        self._find_orbits(now)
 
         for hx in in_range:  # trails underneath the icons
             if hx == self.selected:
@@ -3111,6 +3136,17 @@ class Radar:
 
         if self.selected:
             self._draw_selected_path(aircraft[self.selected], trails.get(self.selected, []))
+        if self.settings.heading_lines:
+            for hx in in_range:
+                self._draw_heading_line(aircraft[hx])
+        drawn = set()
+        for hx in in_range:                    # formations: thin links between the jets
+            group = self.formations.get(hx)
+            if group and group[0] not in drawn:
+                drawn.add(group[0])
+                pts = [self.to_canvas(aircraft[h]["lat"], aircraft[h]["lon"]) for h in group if h in aircraft]
+                for a, b in zip(pts, pts[1:]):
+                    pygame.draw.line(cv, MIL, a, b, 1)
 
         # draw military last so they sit on top
         for hx in sorted(in_range, key=lambda h: is_military(aircraft[h])):
@@ -3228,12 +3264,135 @@ class Radar:
                                  turn(-13 * math.cos(a), -13 * math.sin(a) - 1), 2)
         if on_ground and hx != self.selected:
             return            # parked/taxiing aircraft: icon only, no clutter
-        if x > C + 250:   # near the right edge of the round screen: label on the left
-            self.blit_text(callsign(p), 28, col, (x - 20, y - 18), "topright")
-            self.blit_text(fmt_alt(p), 24, col, (x - 20, y + 2), "topright")
-        else:
-            self.blit_text(callsign(p), 28, col, (x + 20, y - 18), "topleft")
-            self.blit_text(fmt_alt(p), 24, col, (x + 20, y + 2), "topleft")
+        group = self.formations.get(hx)
+        note = (f"formation of {len(group)}" if group and group[0] == hx else
+                ("orbiting" if hx in self.orbits else ""))
+        right = x > C + 250             # near the right edge of the round screen: label on the left
+        lx, anchor = (x - 20, "topright") if right else (x + 20, "topleft")
+        self.blit_text(callsign(p), 28, col, (lx, y - 18), anchor)
+        self.blit_text(fmt_alt(p), 24, col, (lx, y + 2), anchor)
+        if note:
+            self.blit_text(note, 22, SELECT if hx != self.selected else col, (lx, y + 22), anchor)
+
+    # -- heading lines, formations, orbits, rare visitors -----------------------------
+    def _draw_heading_line(self, p):
+        """Thin line to where the plane will be in 1 minute at its current speed and heading."""
+        gs, track = p.get("gs"), p.get("track")
+        if p.get("alt_baro") == "ground" or not isinstance(gs, (int, float)) or gs < 40 \
+                or not isinstance(track, (int, float)):
+            return
+        km = gs * 1.852 / 60                                    # distance flown in one minute
+        t = math.radians(track)
+        lat = p["lat"] + km * math.cos(t) / KM_PER_DEG
+        lon = p["lon"] + km * math.sin(t) / (KM_PER_DEG * math.cos(math.radians(p["lat"])))
+        a, b = self.to_canvas(p["lat"], p["lon"]), self.to_canvas(lat, lon)
+        length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if length < 22:
+            return                                              # shorter than the icon: nothing to show
+        cap = R * 0.3                                           # zoomed in: show the direction, not a full minute
+        if length > cap:
+            b = (a[0] + (b[0] - a[0]) * cap / length, a[1] + (b[1] - a[1]) * cap / length)
+        col = MIL_DIM if is_military(p) else CIVIL_DIM
+        pygame.draw.line(self.canvas, col, a, b, 2)
+        pygame.draw.circle(self.canvas, col, b, 4)
+
+    def _find_formations(self, aircraft, now):
+        """Military jets flying together: within 2.5 km, same height (+-1,500 ft), speed (+-40 kt) and
+        heading (+-25 deg) for at least 20 s."""
+        mil = [(hx, p) for hx, p in aircraft.items() if is_military(p) and isinstance(p.get("alt_baro"), (int, float))
+               and isinstance(p.get("gs"), (int, float)) and isinstance(p.get("track"), (int, float)) and p["gs"] >= 80]
+        together = set()
+        for i, (ha, a) in enumerate(mil):
+            for hb, b in mil[i + 1:]:
+                if (abs(a["alt_baro"] - b["alt_baro"]) <= 1500 and abs(a["gs"] - b["gs"]) <= 40
+                        and abs((a["track"] - b["track"] + 180) % 360 - 180) <= 25
+                        and km_between((a["lat"], a["lon"]), (b["lat"], b["lon"])) <= 2.5):
+                    together.add(tuple(sorted((ha, hb))))
+        self._pairs = {k: self._pairs.get(k, now) for k in together}
+        parent = {}
+
+        def root(h):
+            while parent.get(h, h) != h:
+                h = parent[h]
+            return h
+        for (ha, hb), since in self._pairs.items():
+            if now - since >= 20:
+                parent.setdefault(ha, ha)
+                parent.setdefault(hb, hb)
+                parent[root(ha)] = root(hb)
+        groups = {}
+        for h in parent:
+            groups.setdefault(root(h), []).append(h)
+        self.formations = {h: sorted(g) for g in groups.values() if len(g) > 1 for h in g}
+
+    def formation_label(self, hx):
+        """e.g. "Formation of 4 Eurofighter Typhoons", or "" when the plane flies alone."""
+        group = self.formations.get(hx)
+        if not group:
+            return ""
+        planes = self._last_aircraft
+        types = {planes.get(h, {}).get("t") for h in group}
+        name = ""
+        if len(types) == 1 and None not in types and group[0] in planes:
+            model = self.info.get(planes[group[0]])["model"] or TYPE_NAMES.get(next(iter(types)))
+            name = f" {model}s" if model else ""
+        return f"Formation of {len(group)}{name}"
+
+    def _find_orbits(self, now):
+        """Military planes flying circles or racetracks (tankers, AWACS) in the last 20 minutes."""
+        if now - self._orbit_at < 30 or not self.feed or self.replay:
+            return
+        self._orbit_at = now
+        with self.feed.lock:
+            hist = [h for h in self.feed.history if h[0] >= now - 20 * 60]
+        paths = {}
+        for ts, snap in hist:
+            for hx, pl in snap.items():
+                if is_military(pl) and pl.get("alt_baro") != "ground":
+                    paths.setdefault(hx, []).append((pl["lat"], pl["lon"]))
+        orbits = {}
+        for hx, pts in paths.items():
+            thin = [pts[0]]
+            for q in pts[1:]:
+                if km_between(thin[-1], q) >= 1.5:               # ignore jitter: only real moves count
+                    thin.append(q)
+            if len(thin) < 8:
+                continue
+            turned, prev = 0.0, None
+            for a, b in zip(thin, thin[1:]):
+                brg = math.degrees(math.atan2((b[1] - a[1]) * math.cos(math.radians(a[0])), b[0] - a[0]))
+                if prev is not None:
+                    turned += (brg - prev + 180) % 360 - 180
+                prev = brg
+            lats, lons = [q[0] for q in thin], [q[1] for q in thin]
+            span = km_between((min(lats), min(lons)), (max(lats), max(lons)))
+            if abs(turned) >= 300 and span <= 120:
+                e, n = self.home_offset_km(sum(lats) / len(lats), sum(lons) / len(lons))
+                orbits[hx] = {"km": math.hypot(e, n), "dir": compass_direction(e, n),
+                              "laps": max(1, round(abs(turned) / 360))}
+        self.orbits = orbits
+
+    def orbit_label(self, hx):
+        o = self.orbits.get(hx)
+        if not o:
+            return ""
+        laps = f"{o['laps']} lap{'s' if o['laps'] > 1 else ''} in 20 min"
+        return f"Orbiting {fmt_dist(round(o['km']))} {o['dir']}, {laps}"
+
+    def is_rare(self, p, now):
+        """Military type that was never in the sightings log before (decided once per plane)."""
+        hx = p.get("hex")
+        if not is_military(p):
+            return False
+        if hx not in self._rare:
+            info = self.info.get(p)
+            if info["state"] == "loading":
+                return False                                    # wait until the model is known
+            model = info["model"]
+            if not (model or p.get("t")):
+                return False                                    # type not broadcast: can't tell
+            self._rare[hx] = not self.sightings.seen_before(p, model, now)
+        return self._rare[hx]
 
     def _find_alert(self, aircraft):
         """Most urgent plane for the alert banner, or None. Returns (level, hex, plane) with plane["_alert"] set.
@@ -3427,10 +3586,16 @@ class Radar:
         else:
             title = f"{'MILITARY ALERT' if red else 'AIRCRAFT NEARBY'} - LOOK {where}" + (f", {up}" if up else "")
             parts = [callsign(p), info["model"] or p.get("t") or "", f"{fmt_dist(round(d, 1 if d >= 1 else 2))} away", fmt_alt(p)]
+        if not emergency and self.formations.get(hx):
+            parts[0] = self.formation_label(hx)
+            if parts[1] and parts[1] in parts[0]:
+                parts[1] = ""                                   # model is already in "Formation of 3 ...s"
         detail = "  |  ".join(x for x in parts if x)
         seen, loud = self.spotting(p, alert["dist"]) if not emergency else ("", "")
         rating = ", ".join(x for x in (seen.lower(), loud) if x)
-        hint = "" if emergency else "  |  ".join(h for h in (rating, self._sun_glare(p, alert["dist"]), self.weather.spotting_hint()) if h)
+        rare = "RARE: first time seen here" if red and not emergency and self.is_rare(p, now) else ""
+        hint = "" if emergency else "  |  ".join(
+            h for h in (rare, rating, self._sun_glare(p, alert["dist"]), self.weather.spotting_hint()) if h)
         tsize = 44 if self.font(44).size(title)[0] <= 780 else 34
         w = min(1000, max(self.font(tsize).size(title)[0], self.font(28).size(detail)[0], self.font(24).size(hint)[0]) + 48)
         rect = pygame.Rect(0, 0, w, 128 if hint else 100)
@@ -3609,7 +3774,10 @@ class Radar:
             return
 
         loading = info["state"] == "loading"
-        rect = pygame.Rect(0, 0, 480, 166 if mil else 222)
+        hx = p.get("hex")
+        notes = [n for n in (("RARE: first time seen here" if self.is_rare(p, now) else ""),
+                             self.formation_label(hx), self.orbit_label(hx)) if n]
+        rect = pygame.Rect(0, 0, 480, (166 if mil else 222) + 26 * len(notes))
         if at_top:
             rect.midtop = (C, self.alert_rect.bottom + 12 if self.alert_rect else 158)   # below an alert banner
         else:
@@ -3635,6 +3803,9 @@ class Radar:
         seen, loud = self.spotting(p, p.get("_dist_km", 0))
         if seen:
             self.blit_text(f"{seen}  |  {loud}", 24, SELECT, (x0, y), "topleft")
+            y += 26
+        for n in notes:
+            self.blit_text(n[:40], 24, ALERT_YELLOW if n.startswith("RARE") else MIL, (x0, y), "topleft")
             y += 26
 
         if not mil:                       # route: FROM ---> TO
