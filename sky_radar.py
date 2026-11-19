@@ -1409,6 +1409,94 @@ class TrafficScreen:
         self.rects.append((rect, self.settings.done))
 
 
+class WeatherScreen:
+    """Live weather at home: now, details and the next 12 hours."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.rects = []
+
+    def reset(self):
+        self.settings.ui.weather.refresh()
+
+    def update(self, now):
+        pass
+
+    def type_text(self, t):
+        pass
+
+    def key(self, k):
+        pass
+
+    def tap(self, x, y):
+        for rect, action in self.rects:
+            if rect.collidepoint(x, y):
+                action()
+                return
+
+    def draw(self, ui, now):
+        self.rects = []
+        w = ui.weather
+        cur = w.now
+        age = int((now - w.updated) // 60) if w.updated else None
+        sub = self.settings.location.name + (f"  |  updated {age} min ago" if age else "  |  just updated" if age == 0 else "")
+        draw_screen_bg(ui, "Weather", sub)
+        cv = ui.canvas
+        if not cur:
+            ui.blit_text("Loading weather...", 30, TEXT_DIM, (C, 420))
+        else:
+            # now: icon, big temperature, condition
+            draw_weather_icon(cv, cur.get("weather_code"), cur.get("is_day") == 1, C - 170, 285, 100)
+            ui.blit_text(fmt_temp(cur.get("temperature_2m")), 80, TEXT, (C - 80, 270), "midleft")
+            ui.blit_text(w.condition(), 32, TEXT, (C + 100, 255), "midleft")
+            ui.blit_text(f"feels like {fmt_temp(cur.get('apparent_temperature'))}", 24, TEXT_DIM, (C + 100, 292), "midleft")
+            # details in two columns
+            gust = cur.get("wind_gusts_10m")
+            vis = w.visibility_km
+            rows = [("Wind", w.wind() + (f", gusts {fmt_speed_kmh(gust)}" if isinstance(gust, (int, float)) and gust >= 25 else "")),
+                    ("Clouds", f"{cur.get('cloud_cover', '-')}%  (low {cur.get('cloud_cover_low', '-')}, "
+                               f"mid {cur.get('cloud_cover_mid', '-')}, high {cur.get('cloud_cover_high', '-')})"),
+                    ("Humidity", f"{cur.get('relative_humidity_2m', '-')}%"),
+                    ("Visibility", fmt_dist(round(vis)) if isinstance(vis, (int, float)) and vis >= 1 else
+                     (fmt_dist(round(vis, 2)) if isinstance(vis, (int, float)) else "-")),
+                    ("Pressure", f"{round(cur['pressure_msl'])} hPa" if isinstance(cur.get("pressure_msl"), (int, float)) else "-"),
+                    ("Rain now", f"{cur.get('precipitation', 0):g} mm"),
+                    ("Sun", f"rise {w.sun.get('rise', '-')}, set {w.sun.get('set', '-')}" if w.sun else "-"),
+                    ("Contrails", w.contrails or "-")]
+            for i, (label, value) in enumerate(rows):
+                cx = C - 320 + (i % 2) * 340
+                cy = 350 + (i // 2) * 62
+                ui.blit_text(label, 22, TEXT_DIM, (cx, cy), "topleft")
+                ui.blit_text(value[:30], 26, TEXT, (cx, cy + 24), "topleft")
+            # next 12 hours
+            y0 = 615
+            hours = w.hours[:12]
+            if hours:
+                cw = 660 / len(hours)
+                pygame.draw.rect(cv, SCOPE_BG, pygame.Rect(C - 340, y0 - 12, 680, 168), border_radius=12)
+                for i, h in enumerate(hours):
+                    cx = C - 330 + cw * i + cw / 2
+                    hh = int(h["time"][11:13])
+                    label = "now" if i == 0 else (f"{hh % 12 or 12}{'a' if hh < 12 else 'p'}" if UNITS["clock"] == "12h" else f"{hh:02d}")
+                    ui.blit_text(label, 22, TEXT_DIM, (cx, y0 + 6))
+                    draw_weather_icon(cv, h["code"], h["day"] == 1, cx, y0 + 50, 34)
+                    ui.blit_text(fmt_temp(h["temp"]), 22, TEXT, (cx, y0 + 92))
+                    rain = h.get("rain") or 0
+                    ui.blit_text(f"{rain}%", 20, (110, 170, 240) if rain >= 30 else TEXT_DIM, (cx, y0 + 120))
+                best = w.best_hour()
+                tip = (f"Clearest sky for spotting: {fmt_clock(time.mktime(time.strptime(best['time'], '%Y-%m-%dT%H:%M')))}"
+                       f" ({best['cloud']}% cloud)") if best else "No daylight left in the next 12 hours"
+                if best and best["cloud"] >= 85:
+                    tip = "Overcast all day - low jets only, high ones stay hidden"
+                ui.blit_text(tip, 24, SELECT, (C, y0 + 182))
+                ui.blit_text("rain chance in blue", 20, TEXT_DIM, (C, y0 + 210))
+        rect = pygame.Rect(0, 0, 220, 64)
+        rect.midtop = (C, 860)
+        draw_button(ui, rect, "Back", primary=True)
+        self.rects.append((rect, self.settings.done))
+        ui.blit_text("Weather data: Open-Meteo", 20, TEXT_DIM, (C, 950))
+
+
 # --------------------------------------------------------------------------- settings menu
 class Settings:
     """Settings menu (gear button) and the first-run setup: Wi-Fi, then location."""
@@ -1420,7 +1508,8 @@ class Settings:
         self.wifi = FakeWifi() if os.environ.get("SKY_RADAR_FAKE_WIFI") else NmcliWifi()
         self.screens = {"location": LocationScreen(self), "wifi": WifiScreen(self), "directions": DirectionsScreen(self),
                         "sightings": SightingsScreen(self), "airport": AirportScreen(self),
-                        "feed": FeedStatusScreen(self), "places": PlacesScreen(self), "traffic": TrafficScreen(self)}
+                        "feed": FeedStatusScreen(self), "places": PlacesScreen(self), "traffic": TrafficScreen(self),
+                        "weather": WeatherScreen(self)}
         prefs = load_prefs()
         self.max_alt = int(prefs.get("max_alt_ft", 0) or 0)            # 0 = show all heights
         self.theme = prefs.get("theme", "green") if prefs.get("theme") in THEMES else "green"
@@ -1459,6 +1548,11 @@ class Settings:
         self.from_menu = True
         self.flow = []
         self.show("menu")
+
+    def open_weather(self):
+        """Straight from the radar: Back returns to the radar."""
+        self.from_menu, self.flow = False, []
+        self.show("weather")
 
     def show(self, name):
         self.screen = name
@@ -1781,6 +1875,8 @@ class Settings:
                 ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
                  lambda: self.show("sightings")),
                 ("Airport board", self._airport_label(), lambda: self.show("airport")),
+                ("Weather", (f"{self.ui.weather.label()}, {self.ui.weather.condition().lower()}"
+                             if self.ui.weather.now else "Live weather at your location"), lambda: self.show("weather")),
                 ("Traffic", "Aircraft around you over the last 24 hours", lambda: self.show("traffic")),
                 ("Replay", f"Rewind up to {max(1, round((time.time() - hist[0][0]) / 60))} min" if hist
                  else "Nothing recorded yet", self._start_replay if hist else None)]),
@@ -2511,31 +2607,173 @@ class AutoUpdater:
 
 
 # --------------------------------------------------------------------------- weather
+WMO_TEXT = {0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Freezing fog",
+            51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 56: "Freezing drizzle", 57: "Freezing drizzle",
+            61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Freezing rain", 67: "Freezing rain",
+            71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains", 80: "Light showers", 81: "Showers",
+            82: "Heavy showers", 85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm",
+            96: "Thunderstorm, hail", 99: "Thunderstorm, hail"}
+
+
+def weather_kind(code):
+    """Icon family for a WMO weather code."""
+    if code is None:
+        return "cloud"
+    if code <= 1:
+        return "clear"
+    if code == 2:
+        return "partly"
+    if code == 3:
+        return "cloud"
+    if code in (45, 48):
+        return "fog"
+    if code >= 95:
+        return "storm"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "snow"
+    return "rain"
+
+
+def fmt_temp(c):
+    if not isinstance(c, (int, float)):
+        return "-"
+    return f"{round(c * 9 / 5 + 32)}\u00b0F" if UNITS["dist"] == "mi" else f"{round(c)}\u00b0C"
+
+
+def fmt_speed_kmh(kmh):
+    if not isinstance(kmh, (int, float)):
+        return "-"
+    return f"{round(kmh * 0.621371)} mph" if UNITS["dist"] == "mi" else f"{round(kmh)} km/h"
+
+
+def draw_weather_icon(cv, code, is_day, x, y, size):
+    """Small weather symbol centred on (x, y): sun/moon, cloud, rain, snow, fog or storm."""
+    kind = weather_kind(code)
+    u = size / 40
+    sun_col, cloud_col, drop_col = (250, 200, 60), (190, 205, 210), (110, 170, 240)
+
+    def sun(cx, cy, r):
+        if is_day:
+            for k in range(8):
+                a = math.radians(k * 45)
+                pygame.draw.line(cv, sun_col, (cx + (r + 3 * u) * math.cos(a), cy + (r + 3 * u) * math.sin(a)),
+                                 (cx + (r + 8 * u) * math.cos(a), cy + (r + 8 * u) * math.sin(a)), max(1, int(2 * u)))
+            pygame.draw.circle(cv, sun_col, (cx, cy), r)
+        else:                                                    # moon: a circle with a bite out of it
+            pygame.draw.circle(cv, (225, 225, 200), (cx, cy), r)
+            pygame.draw.circle(cv, PANEL_BG, (cx + r * 0.45, cy - r * 0.3), r * 0.85)
+
+    def cloud(cx, cy, col=cloud_col):
+        for dx, dy, r in ((-9, 3, 8), (0, -3, 11), (10, 2, 9)):
+            pygame.draw.circle(cv, col, (cx + dx * u, cy + dy * u), r * u)
+        pygame.draw.rect(cv, col, pygame.Rect(cx - 17 * u, cy + 2 * u, 36 * u, 9 * u), border_radius=int(4 * u))
+
+    if kind == "clear":
+        sun(x, y, 11 * u)
+    elif kind == "partly":
+        sun(x - 7 * u, y - 7 * u, 9 * u)
+        cloud(x + 3 * u, y + 3 * u)
+    elif kind == "fog":
+        for k in range(4):
+            pygame.draw.line(cv, cloud_col, (x - 16 * u + (k % 2) * 4 * u, y - 10 * u + k * 7 * u),
+                             (x + 16 * u - (k % 2) * 4 * u, y - 10 * u + k * 7 * u), max(2, int(3 * u)))
+    else:
+        cloud(x, y - 5 * u, (150, 160, 170) if kind in ("rain", "storm", "snow") else cloud_col)
+        if kind == "rain":
+            for dx in (-9, 0, 9):
+                pygame.draw.line(cv, drop_col, (x + dx * u, y + 10 * u), (x + (dx - 3) * u, y + 18 * u), max(1, int(2 * u)))
+        elif kind == "snow":
+            for dx in (-9, 0, 9):
+                pygame.draw.circle(cv, (235, 240, 245), (x + dx * u, y + 14 * u), max(1, 2.5 * u))
+        elif kind == "storm":
+            pygame.draw.polygon(cv, sun_col, [(x + 2 * u, y + 6 * u), (x - 5 * u, y + 15 * u), (x, y + 15 * u),
+                                              (x - 3 * u, y + 22 * u), (x + 6 * u, y + 12 * u), (x + 1 * u, y + 12 * u)])
+
+
 class Weather:
-    """Cloud cover at home from Open-Meteo, refreshed every 15 minutes (position rounded to ~1 km)."""
+    """Live weather at home from Open-Meteo (free, no key), refreshed every 10 minutes.
+    Only a position rounded to about 1 km is sent."""
+
+    CURRENT = ("temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,cloud_cover,"
+               "cloud_cover_low,cloud_cover_mid,cloud_cover_high,visibility,wind_speed_10m,wind_direction_10m,"
+               "wind_gusts_10m,precipitation,pressure_msl")
+    HOURLY = "temperature_2m,cloud_cover,precipitation_probability,weather_code,is_day"
 
     def __init__(self, location):
         self.location = location
         self.cloud = None          # percent
         self.visibility_km = None
         self.contrails = ""        # e.g. "long trails likely"
+        self.now = {}              # the "current" block from Open-Meteo
+        self.hours = []            # next 12 hours: dicts with time, temp, cloud, rain, code, day
+        self.sun = {}              # today's sunrise / sunset ("HH:MM")
+        self.updated = 0.0
+        self.wake = threading.Event()
         threading.Thread(target=self._run, daemon=True).start()
+
+    def refresh(self):
+        self.wake.set()
 
     def _run(self):
         while True:
             lat, lon = self.location.current()
             try:
-                url = f"{WEATHER_URL}?latitude={lat:.2f}&longitude={lon:.2f}&current=cloud_cover,visibility"
+                url = (f"{WEATHER_URL}?latitude={lat:.2f}&longitude={lon:.2f}&timezone=auto&forecast_days=2"
+                       f"&current={self.CURRENT}&hourly={self.HOURLY}&daily=sunrise,sunset")
                 req = urllib.request.Request(url, headers={"User-Agent": "sky-radar/0.1"})
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    cur = json.load(resp).get("current", {})
+                    data = json.load(resp)
+                cur = data.get("current", {})
+                self.now = cur
                 self.cloud = cur.get("cloud_cover")
                 vis = cur.get("visibility")
                 self.visibility_km = vis / 1000 if isinstance(vis, (int, float)) else None
+                h = data.get("hourly", {})
+                hour_now = (cur.get("time") or "")[:13]
+                self.hours = [{"time": t, "temp": h["temperature_2m"][i], "cloud": h["cloud_cover"][i],
+                               "rain": h["precipitation_probability"][i], "code": h["weather_code"][i],
+                               "day": h["is_day"][i]}
+                              for i, t in enumerate(h.get("time", [])) if t[:13] >= hour_now][:12]
+                d = data.get("daily", {})
+                self.sun = {"rise": (d.get("sunrise") or [""])[0][-5:], "set": (d.get("sunset") or [""])[0][-5:]}
+                self.updated = time.time()
                 self.contrails = self._contrails(lat, lon)
             except Exception:
-                pass                       # keep the last value; try again later
-            time.sleep(15 * 60)
+                pass                       # keep the last values; try again later
+            self.wake.wait(10 * 60)
+            self.wake.clear()
+
+    def condition(self):
+        code = self.now.get("weather_code")
+        text = WMO_TEXT.get(code, "")
+        if code in (0, 1) and self.now.get("is_day") == 1:
+            text = "Sunny" if code == 0 else "Mostly sunny"
+        return text
+
+    def wind(self):
+        sp, dr = self.now.get("wind_speed_10m"), self.now.get("wind_direction_10m")
+        if not isinstance(sp, (int, float)):
+            return ""
+        if sp < 2 or not isinstance(dr, (int, float)):
+            return "calm"
+        # wind direction is where it comes FROM
+        return f"{fmt_speed_kmh(sp)} {compass_direction(math.sin(math.radians(dr)), math.cos(math.radians(dr)))}"
+
+    def hud_line(self):
+        """Short line under the clock, e.g. "Overcast | wind 18 km/h SW | short contrails"."""
+        if not self.now:
+            return f"Contrails: {self.contrails}" if self.contrails else ""
+        trails = {"long trails likely": "long contrails", "short trails only": "short contrails",
+                  "no trails expected": "no contrails"}.get(self.contrails, "")
+        wind = self.wind()
+        return "  |  ".join(x for x in (self.condition(), f"wind {wind}" if wind else "", trails) if x)
+
+    def best_hour(self):
+        """Clearest daylight hour in the next 12 h, for the spotting tip."""
+        day = [h for h in self.hours if h.get("day") and isinstance(h.get("cloud"), (int, float))]
+        if not day:
+            return None
+        return min(day, key=lambda h: h["cloud"] + (h.get("rain") or 0))
 
     @staticmethod
     def _contrails(lat, lon):
@@ -2559,6 +2797,9 @@ class Weather:
         return {"long": "long trails likely", "short": "short trails only", "none": "no trails expected"}[best]
 
     def label(self):
+        temp = self.now.get("temperature_2m")
+        if isinstance(temp, (int, float)):
+            return fmt_temp(temp)
         return f"clouds {round(self.cloud)}%" if isinstance(self.cloud, (int, float)) else ""
 
     def spotting_hint(self):
@@ -3041,6 +3282,9 @@ class Radar:
                 (abs(x - C) < 200 and abs(y - 100) < 25):      # gear button or the place name
             self.settings.open_menu()
             return
+        if abs(x - C) < 260 and abs(y - 136) < 16 and self.weather.now and not getattr(self, "alert_rect", None):
+            self.settings.open_weather()                        # tap the weather line
+            return
         for (bx, by), step in ((self.btn_minus, 1), (self.btn_plus, -1)):
             if math.hypot(x - bx, y - by) < 50:
                 self.zoom(step)
@@ -3173,8 +3417,9 @@ class Radar:
         hud_bg = PANEL_BG
         place = self.location.name
         clouds = self.weather.label()
-        if self.weather.contrails:
-            self.blit_text(f"Contrails: {self.weather.contrails}", 24, TEXT_DIM, (C, 136), bg=hud_bg)
+        wline = self.weather.hud_line()
+        if wline:
+            self.blit_text(wline, 24, TEXT_DIM, (C, 136), bg=hud_bg)
         self.blit_text(f"{place}  {fmt_clock()}" + (f"  |  {clouds}" if clouds else ""), 34, TEXT, (C, 100), bg=hud_bg)
         summary = f"{len(in_range)} aircraft  |  {mil_count} military  |  {fmt_dist(self.range_km)}" + (
             f"  |  < {fmt_alt_ft(self.settings.max_alt)}" if self.settings.max_alt else "")

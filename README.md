@@ -28,6 +28,12 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   the card says where, e.g. "Orbiting 40 km NW, 2 laps in 20 min". Often a sign that fighters are training nearby
 - **Rare visitors:** if a military type has never been in your sightings log before, the alert and card say
   **"RARE: first time seen here"**
+- **Live weather:** the top of the radar shows the temperature, the sky (e.g. "Overcast"), the wind and the
+  contrail outlook, refreshed every 10 minutes from Open-Meteo. Tap that line (or **Settings → Weather**) for the
+  full picture: feels-like temperature, wind and gusts, cloud layers (low, mid, high), humidity, visibility,
+  pressure, rain, sunrise and sunset, the next 12 hours with rain chances, and the clearest hour for spotting
+
+  <img src="docs/weather.png" width="360" alt="Weather screen: now, details and the next 12 hours">
 - Tap a plane for a small details card. It appears on the half of the screen away from the plane, so the plane stays visible:
   - **Civil:** model (e.g. Airbus A320neo), airline, from → to, altitude, speed in knots, and arrival time at the destination
   - **Military:** model (e.g. Eurofighter Typhoon, F-35, Rafale), operator, altitude, speed,
@@ -46,8 +52,7 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
     (`warning_lead_seconds` in `config.json`, 0 turns it off)
   - **Settings → Alert directions:** tap the compass directions you can actually see from (for example only W for a
     west-facing balcony). Planes in the other directions don't trigger alerts. **All** = alerts from every direction
-  - **Weather check:** cloud cover from Open-Meteo is shown at the top ("clouds 85%"), and alerts add
-    "Cloudy - it may be hidden" when the sky is overcast or visibility is poor
+  - **Weather check:** alerts add "Cloudy - it may be hidden" when the sky is overcast or visibility is poor
   - **Contrail forecast:** a line under the top bar says whether planes at cruising height leave long trails,
     short trails or none today (temperature and humidity at ~34,000 ft from Open-Meteo). Long trails make high jets
     much easier to spot
@@ -99,6 +104,7 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   - **Views**
     - **Sightings:** the list of military aircraft seen near you, with Best times and Records
     - **Airport board:** arrivals and departures at your nearest airports
+    - **Weather:** live weather and the next 12 hours
     - **Traffic:** the 24-hour traffic chart
     - **Replay:** the last 30 minutes
   - **Display**
@@ -124,10 +130,10 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
 the same jet in your zone ("LOOK WEST, 23° UP"), and an airliner squawking 7700. The cloud hint appears because it was
 overcast. The small sun on the edge shows where the sun is.*
 
-![Settings, alert directions, sightings, location search and Wi-Fi](docs/settings.png)
+![Settings list, alert directions, saved places, traffic chart, weather and replay](docs/settings.png)
 
-*The settings list (scrolled to each section), alert directions (west side selected), replay, the 24-hour traffic chart (example data)
-and saved places.*
+*The settings list (scrolled to each section), alert directions (west side selected), saved places, the 24-hour traffic
+chart (example data), live weather and replay.*
 
 ![Colour themes: green, amber, blue, red](docs/themes.png)
 
@@ -213,7 +219,7 @@ Only a rounded position (about 1 km) is sent to the flight API.
 For the "how high to look" angle, your home's ground height is looked up once from
 [Open-Meteo](https://open-meteo.com) using a position rounded to about 100 m, then cached in `prefs.json`.
 To skip that, set `home_elevation_m` in `config.json` (metres above sea level).
-Cloud cover comes from Open-Meteo too, using a position rounded to about 1 km.
+Weather comes from Open-Meteo too, using a position rounded to about 1 km.
 Your sightings log (`sightings.json`), traffic history (`traffic.json`), settings and saved places (`prefs.json`)
 stay on the device and are git-ignored.
 
