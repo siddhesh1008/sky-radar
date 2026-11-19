@@ -1426,7 +1426,11 @@ class Settings:
         self.theme = prefs.get("theme", "green") if prefs.get("theme") in THEMES else "green"
         self.text_large = load_prefs().get("text_size") == "large"
         self.night_mode = load_prefs().get("night_mode", "off")      # "off", "dim" or "blank"
-        self.menu_page = 0
+        self.menu_scroll = 0.0        # how far the settings list is scrolled (px)
+        self.menu_vel = 0.0           # flick speed (px/s), slows down by itself
+        self.menu_max = 0.0
+        self._menu_press = None       # [x, y, scroll at press, last y, last time, moved]
+        self._menu_last = time.time()
         u = load_prefs().get("units")
         if isinstance(u, list) and tuple(u) in UNIT_PRESETS:
             set_units(*u)
@@ -1449,7 +1453,7 @@ class Settings:
 
     # -- navigation ---------------------------------------------------------------
     def open_menu(self):
-        self.menu_page = 0
+        self.menu_scroll, self.menu_vel = 0.0, 0.0
         self.rotation = get_rotation()
         self.from_menu = True
         self.flow = []
@@ -1558,8 +1562,41 @@ class Settings:
         near = self.ui.airports.nearest(lat, lon, 1)
         return f"{near[0][0]} {near[0][1]}" if near else "Live arrivals and departures"
 
-    def _page(self, n):
-        self.menu_page = n
+    # -- scrolling the settings list (drag, flick or mouse wheel) -------------------
+    MENU_TOP, MENU_BOTTOM = 185, 872           # the list scrolls between these lines
+    DRAG_START = 18                            # px a finger must move before it counts as a scroll
+
+    def menu_press(self, x, y):
+        self.menu_vel = 0.0
+        self._menu_press = [x, y, self.menu_scroll, y, time.time(), False]
+
+    def menu_drag(self, x, y):
+        p = self._menu_press
+        if not p:
+            return
+        if not p[5] and abs(y - p[1]) > self.DRAG_START:
+            p[5] = True
+        if p[5]:
+            now = time.time()
+            dt = max(1e-3, now - p[4])
+            self.menu_vel = 0.6 * self.menu_vel + 0.4 * (p[3] - y) / dt
+            p[3], p[4] = y, now
+            self.menu_scroll = min(self.menu_max, max(0.0, p[2] + (p[1] - y)))
+
+    def menu_release(self, x, y):
+        p, self._menu_press = self._menu_press, None
+        if not p:
+            return
+        if p[5]:
+            if time.time() - p[4] > 0.12:       # finger stopped before lifting: no flick
+                self.menu_vel = 0.0
+        else:
+            self.menu_vel = 0.0
+            self.tap(x, y)
+
+    def menu_wheel(self, dy):
+        self.menu_vel = 0.0
+        self.menu_scroll = min(self.menu_max, max(0.0, self.menu_scroll - dy * 90))
 
     def _cycle_night(self):
         order = ["off", "dim", "blank"]
@@ -1650,85 +1687,114 @@ class Settings:
         else:
             wifi_value = "Managed by this computer"
         touch = multitouch_state()
-        if touch is None:
-            touch_value = "Not needed on this computer"
+        now = time.time()
+        dt, self._menu_last = min(0.1, now - self._menu_last), now
+        if not self._menu_press and abs(self.menu_vel) > 5:          # flick keeps gliding, then stops
+            self.menu_scroll += self.menu_vel * dt
+            self.menu_vel *= 0.05 ** dt
+            if not 0 <= self.menu_scroll <= self.menu_max:
+                self.menu_vel = 0.0
         else:
-            touch_value = "On" if touch else "Off - touch works like a mouse"
+            self.menu_vel = self.menu_vel if self._menu_press else 0.0
         health, updater = self.ui.health, self.ui.updater
-        page = self.menu_page
-        if page == 0:
-            n_places = len(PlacesScreen.places())
-            rows = [("Location", self.location.name, lambda: self.show("location")),
-                    ("Saved places", f"{n_places} saved" if n_places else "Save places to switch quickly", lambda: self.show("places")),
-                    ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
-                    ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
-                    ("Night mode", self.night_label(), self._cycle_night)]
-        elif page == 1:
-            hist = self.ui.feed.history if self.ui.feed else []
-            rows = [("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
-                     lambda: self.show("sightings")),
-                    ("Airport board", self._airport_label(), lambda: self.show("airport")),
-                    ("Traffic", "Aircraft around you over the last 24 hours", lambda: self.show("traffic")),
-                    ("Replay", f"Rewind up to {max(1, round((time.time() - hist[0][0]) / 60)) if hist else 0} min"
-                     if hist else "Nothing recorded yet", self._start_replay if hist else None)]
-        elif page == 2:
-            rows = [("Pinch to zoom", touch_value, self._toggle_pinch),
-                    ("Screen rotation", f"{self.rotation}\u00b0 clockwise" if self.rotation else "Normal", None),
-                    ("Units", units_label(), self._cycle_units),
-                    ("Text size", "Large" if self.text_large else "Normal", self._toggle_text),
-                    ("Colour theme", THEME_NAMES[self.theme], self._cycle_theme),
-                    ("Height filter", self.height_label(), self._cycle_height)]
-        else:
-            rows = [("Pi health", health.label(), None),
-                    ("Crash watchdog", watchdog_label(), None),
-                    ("Auto updates", updater.label(), updater.toggle if updater.available else None),
-                    ("Feed status", self._feed_label(), lambda: self.show("feed")),
-                    ("Offline map", self.ui.map.offline_label() if self.ui.map else "Map is off",
-                     self.ui.map.save_offline if self.ui.map else None)]
-        titles = ["Settings", "Settings - views", "Settings - display", "Settings - system"]
-        draw_screen_bg(ui, titles[page])
-        y = 180
-        step = min(104, (790 - y) // len(rows))      # more rows -> slightly slimmer rows
-        for title, value, action in rows:
-            rect = pygame.Rect(0, 0, 700, step - 10)
-            rect.midtop = (C, y)
-            pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=14)
-            pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
-            ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + (step - 10) * 0.16), "topleft")
-            warn = title == "Pi health" and health.hot()
-            ui.blit_text(value[:48], 28, WARN if warn else TEXT_DIM, (rect.x + 28, rect.y + (step - 10) * 0.57), "topleft")
-            y += step
-            if title == "Screen rotation":
-                ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
-                cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
-                self.rects.append((ccw, lambda: self._rotate(-90)))
-                self.rects.append((cw, lambda: self._rotate(90)))
-                continue
-            if title in ("Pinch to zoom", "Text size"):
-                on = touch if title == "Pinch to zoom" else self.text_large
-                if on is not None:
-                    self._draw_switch(ui, rect.right - 70, rect.centery, on)
-            elif title == "Auto updates":
-                if updater.available:
-                    self._draw_switch(ui, rect.right - 70, rect.centery, updater.enabled)
-            elif action is not None:
-                ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
-            if action is not None:
-                self.rects.append((rect, action))
-        buttons = []
-        if page > 0:
-            buttons.append(("< Back", lambda: self._page(page - 1), False))
-        buttons.append(("Close", self.close, True))
-        if page < 3:
-            buttons.append(("More >", lambda: self._page(page + 1), False))
-        ui.blit_text(f"Page {page + 1} of 4", 22, TEXT_DIM, (C, y + 4))
-        width = 200 if len(buttons) == 3 else 220
-        x = C - (len(buttons) * width + (len(buttons) - 1) * 14) // 2
-        for label, action, primary in buttons:
-            rect = pygame.Rect(x, y + 22, width, 62)
-            draw_button(ui, rect, label, primary=primary)
-            self.rects.append((rect, action))
-            x += width + 14
+        top, bottom = self.MENU_TOP, self.MENU_BOTTOM
+        row_h, head_h = 100, 56
+        sections = self._menu_sections(touch, wifi_value)
+        content = sum(head_h + row_h * len(rows) for _, rows in sections) + 20     # room below the last row
+        self.menu_max = max(0.0, content - (bottom - top))
+        self.menu_scroll = min(self.menu_max, max(0.0, self.menu_scroll))
+        view = pygame.Rect(0, top, CANVAS, bottom - top)
+        ui.canvas.set_clip(view)
+        y = top - int(self.menu_scroll)
+        for name, rows in sections:
+            if top - head_h < y < bottom:
+                ui.blit_text(name.upper(), 26, SWEEP, (C - 320, y + head_h - 14), "bottomleft")
+            y += head_h
+            for title, value, action in rows:
+                rect = pygame.Rect(0, 0, 660, row_h - 10)
+                rect.midtop = (C, y)
+                y += row_h
+                if rect.bottom < top or rect.top > bottom:
+                    continue                                            # off screen: skip drawing
+                pygame.draw.rect(ui.canvas, SCOPE_BG, rect, border_radius=14)
+                pygame.draw.rect(ui.canvas, RING, rect, 1, border_radius=14)
+                ui.blit_text(title, 34, TEXT, (rect.x + 28, rect.y + 14), "topleft")
+                warn = title == "Pi health" and health.hot()
+                ui.blit_text(value if len(value) <= 44 else value[:42].rsplit(' ', 1)[0] + ' …', 28, WARN if warn else TEXT_DIM, (rect.x + 28, rect.y + 52), "topleft")
+                hit = rect.clip(view)
+                if title == "Screen rotation":
+                    ccw = self._draw_rotate_button(ui, rect.right - 140, rect.centery, clockwise=False)
+                    cw = self._draw_rotate_button(ui, rect.right - 60, rect.centery, clockwise=True)
+                    self.rects.append((ccw.clip(view), lambda: self._rotate(-90)))
+                    self.rects.append((cw.clip(view), lambda: self._rotate(90)))
+                    continue
+                if title in ("Pinch to zoom", "Text size"):
+                    on = touch if title == "Pinch to zoom" else self.text_large
+                    if on is not None:
+                        self._draw_switch(ui, rect.right - 70, rect.centery, on)
+                elif title == "Auto updates":
+                    if updater.available:
+                        self._draw_switch(ui, rect.right - 70, rect.centery, updater.enabled)
+                elif action is not None:
+                    ui.blit_text(">", 44, SWEEP, (rect.right - 40, rect.centery))
+                if action is not None and hit.height > 0:
+                    self.rects.append((hit, action))
+        ui.canvas.set_clip(None)
+        # soft fade at both edges so rows slide under them instead of being cut off
+        fade = pygame.Surface((CANVAS, 1), pygame.SRCALPHA)
+        for edge, sign in ((top, 1), (bottom, -1)):
+            for i in range(26):
+                yy = edge + sign * i
+                half = int(math.sqrt(max(0, (C - 4) ** 2 - (yy - C) ** 2)))
+                fade.fill(PANEL_BG + (int(255 * (1 - i / 26) ** 1.6),))
+                ui.canvas.blit(fade, (C - half, yy), pygame.Rect(0, 0, 2 * half, 1))
+        if self.menu_max > 0:                                           # scroll bar on the right
+            track_h = bottom - top - 40
+            bar_h = max(60, track_h * (bottom - top) / content)
+            by = top + 20 + (track_h - bar_h) * self.menu_scroll / self.menu_max
+            pygame.draw.rect(ui.canvas, GRID, (C + 352, top + 20, 6, track_h), border_radius=3)
+            pygame.draw.rect(ui.canvas, SWEEP, (C + 352, by, 6, bar_h), border_radius=3)
+        rect = pygame.Rect(0, 0, 240, 62)
+        rect.midtop = (C, bottom + 18)
+        draw_button(ui, rect, "Close", primary=True)
+        self.rects.append((rect, self.close))
+        if self.menu_scroll < 4 and self.menu_max > 0:
+            ui.blit_text("Swipe up for more", 22, TEXT_DIM, (C, bottom + 98))
+
+    def _menu_sections(self, touch, wifi_value):
+        health, updater = self.ui.health, self.ui.updater
+        n_places = len(PlacesScreen.places())
+        hist = self.ui.feed.history if self.ui.feed else []
+        return [
+            ("General", [
+                ("Location", self.location.name, lambda: self.show("location")),
+                ("Saved places", f"{n_places} saved" if n_places else "Save places to switch quickly", lambda: self.show("places")),
+                ("Wi-Fi", wifi_value, lambda: self.show("wifi")),
+                ("Alert directions", describe_directions(self.alert_dirs), lambda: self.show("directions")),
+                ("Night mode", self.night_label(), self._cycle_night)]),
+            ("Views", [
+                ("Sightings", f"{self.ui.sightings.today()} today, {self.ui.sightings.count_since(7 * 86400)} this week",
+                 lambda: self.show("sightings")),
+                ("Airport board", self._airport_label(), lambda: self.show("airport")),
+                ("Traffic", "Aircraft around you over the last 24 hours", lambda: self.show("traffic")),
+                ("Replay", f"Rewind up to {max(1, round((time.time() - hist[0][0]) / 60))} min" if hist
+                 else "Nothing recorded yet", self._start_replay if hist else None)]),
+            ("Display", [
+                ("Pinch to zoom", "Not needed on this computer" if touch is None else
+                 ("On" if touch else "Off - touch works like a mouse"), self._toggle_pinch),
+                ("Screen rotation", f"{self.rotation}° clockwise" if self.rotation else "Normal", None),
+                ("Units", units_label(), self._cycle_units),
+                ("Text size", "Large" if self.text_large else "Normal", self._toggle_text),
+                ("Colour theme", THEME_NAMES[self.theme], self._cycle_theme),
+                ("Height filter", self.height_label(), self._cycle_height)]),
+            ("System", [
+                ("Pi health", health.label(), None),
+                ("Crash watchdog", watchdog_label(), None),
+                ("Auto updates", updater.label(), updater.toggle if updater.available else None),
+                ("Feed status", self._feed_label(), lambda: self.show("feed")),
+                ("Offline map", self.ui.map.offline_label() if self.ui.map else "Map is off",
+                 self.ui.map.save_offline if self.ui.map else None)])]
+
 
 
 # --------------------------------------------------------------------------- data feed
@@ -3657,6 +3723,15 @@ def main():
                     radar.settings.type_text(ev.text)
                 elif ev.type == pygame.KEYDOWN:
                     radar.settings.key(ev.key)
+                elif radar.settings.screen == "menu":      # the menu list scrolls: tap on release
+                    if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                        radar.settings.menu_press(*to_canvas(*ev.pos))
+                    elif ev.type == pygame.MOUSEMOTION and ev.buttons[0]:
+                        radar.settings.menu_drag(*to_canvas(*ev.pos))
+                    elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                        radar.settings.menu_release(*to_canvas(*ev.pos))
+                    elif ev.type == pygame.MOUSEWHEEL:
+                        radar.settings.menu_wheel(ev.y)
                 elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                     radar.tap(*to_canvas(*ev.pos))
                 continue

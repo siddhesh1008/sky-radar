@@ -80,7 +80,8 @@ Built for the Waveshare 5" round 1080x1080 HDMI touch display, but it runs on an
   rate-limited or resting
 - **Night mode:** dims the screen or switches it off at night (22:00–07:00 by default, `night_start` / `night_end`).
   A touch wakes it for a minute, and **military alerts always wake it**
-- Settings on the screen itself (gear button), on four pages (**< Back** / **More >** to move between them):
+- Settings on the screen itself (gear button), in one list you scroll by swiping up and down (or with the
+  mouse wheel on a PC), grouped into four sections:
   - **General**
     - **Location:** type an address and pick from suggestions as you type
     - **Saved places:** save the current location, switch to a saved one, or remove it
@@ -116,7 +117,7 @@ overcast. The small sun on the edge shows where the sun is.*
 
 ![Settings, alert directions, sightings, location search and Wi-Fi](docs/settings.png)
 
-*Settings (all four pages), alert directions (west side selected), replay, the 24-hour traffic chart (example data)
+*The settings list (scrolled to each section), alert directions (west side selected), replay, the 24-hour traffic chart (example data)
 and saved places.*
 
 ![Colour themes: green, amber, blue, red](docs/themes.png)
