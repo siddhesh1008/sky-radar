@@ -16,6 +16,7 @@ Outside size: Ø158 mm, 46 mm deep (57.6 mm including the Skådis hooks).
 | File | What it is |
 |---|---|
 | `sky-radar-mount-shell.stl` | Front shell (holds the display) |
+| `sky-radar-mount-shell-mic.stl` | Front shell **with a mic port** (for the Jarvis voice assistant, see below). Print this one instead of the plain shell if a USB mic lives inside |
 | `sky-radar-mount-lid-skadis.stl` | Back lid with Skådis hooks, Pi mounting holes and fan vents |
 | `sky-radar-mount.f3d` | Fusion 360 file to edit the design |
 | `sky-radar-mount.step` | STEP for other CAD programs |
@@ -107,6 +108,30 @@ The Waveshare display's picture is upright when its connectors point **up**, so 
   	output HDMI-A-1 enable mode 1080x1080@60.069 position 0,0 transform 180
   }
   ```
+
+## Mic port (optional, for a USB mic inside)
+
+A USB mic sealed inside the case hears the fan much better than you: the vents point at the ceiling and the
+pegboard, and the air moving through them is noisy. Speech reaches it muffled, without the high frequencies a
+wake word needs. `sky-radar-mount-shell-mic.stl` is the same shell with:
+
+- a **grille of 7 × Ø2 mm holes** through the side wall, on the **right when you look at the screen**,
+  22 mm behind the front face (just behind the display), away from the fan and the vents;
+- two **zip-tie anchors** inside, either side of the grille, with slots for a tie up to 4 mm wide.
+  Their undersides are 45° chamfers, so the shell still prints face down without extra supports.
+
+![Cuts through the mic port: top-down, through the grille, through an anchor](images/mic-port-sections.png)
+
+Fitting the mic:
+
+1. Connect the mic to the Pi with a **short, flexible USB extension** (10–20 cm) inside the case,
+   so it can reach the grille.
+2. Put a thin **foam or felt ring** (about 10 mm across, with a hole in the middle) over the grille on the inside.
+3. Hold the mic with its **sound opening on the ring**, then pull a zip tie through both anchors and around the mic.
+   The mic should press on the foam, so it hears the room through the holes and not the air inside the case.
+
+The port was added to the exported STL with `tools/add_mic_port.py` (trimesh). It is **not in the `.f3d` / `.step`
+yet**; change `ANG` (side) or `ZC` (depth) in the script and run it again to move it.
 
 ## Before printing, check
 
